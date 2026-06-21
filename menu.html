@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#06070a" />
+<title>ASTROLAB</title>
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; min-height:100%; background:#06070a; color:#ece7da;
+    font-family: Georgia, 'Times New Roman', serif; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center;
+    min-height:100vh; padding:40px 22px; text-align:center; }
+  h1 { font-size:26px; letter-spacing:.22em; font-weight:400; margin:0; text-transform:uppercase; }
+  .sub { color:#7c7f88; font-size:13px; letter-spacing:.06em; margin:10px 0 40px; font-style:italic; }
+  .rooms { display:flex; flex-wrap:wrap; gap:18px; justify-content:center; max-width:760px; }
+  a.room { text-decoration:none; color:#ece7da; width:220px; padding:30px 22px;
+    border:1px solid rgba(236,231,218,.16); border-radius:4px; background:rgba(236,231,218,.03);
+    transition:background .2s; }
+  a.room:active, a.room:hover { background:rgba(236,231,218,.09); }
+  .room .name { font-size:19px; letter-spacing:.14em; text-transform:uppercase; }
+  .room .desc { color:#7c7f88; font-size:12.5px; margin-top:10px; font-style:italic; line-height:1.5; }
+  .cam { margin-top:34px; color:#7c7f88; font-size:12px; letter-spacing:.04em; }
+  .cam button { font-family:inherit; color:#ece7da; background:rgba(236,231,218,.05);
+    border:1px solid rgba(236,231,218,.16); border-radius:2px; padding:8px 16px; margin-left:10px;
+    font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
+  .foot { margin-top:30px; color:#5a5d65; font-size:11px; letter-spacing:.05em; }
+</style>
+</head>
+<body>
+  <h1>ASTROLAB</h1>
+  <div class="sub">a room remembering itself · A=432</div>
+  <div class="rooms">
+    <a class="room" id="play" href="hands.html">
+      <div class="name">Play</div>
+      <div class="desc">your hands are the instrument — glide, freeze layers, bring your hands together for a binaural beat</div>
+    </a>
+    <a class="room" href="pulse.html">
+      <div class="name">Rest</div>
+      <div class="desc">sit still — the camera finds your heartbeat and the drone breathes you toward calm</div>
+    </a>
+    <a class="room" href="index.html">
+      <div class="name">Listen</div>
+      <div class="desc">the place becomes sound — microphone, light and location shape a living field</div>
+    </a>
+  </div>
+  <div class="cam">Play camera: <button id="cam">Rear</button></div>
+  <div class="foot">headphones recommended · soft, steady light</div>
+  <script>
+    let cam = 'environment';
+    const b = document.getElementById('cam'), play = document.getElementById('play');
+    b.addEventListener('click', () => {
+      cam = cam === 'environment' ? 'user' : 'environment';
+      b.textContent = cam === 'environment' ? 'Rear' : 'Front';
+      play.href = 'hands.html?cam=' + cam;
+    });
+  </script>
+</body>
+</html>

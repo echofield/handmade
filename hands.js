@@ -433,23 +433,22 @@ const MidiEngine = (() => {
 })();
 
 const ENGINES = { synth: SoftSynth, samples: SampleEngine, midi: MidiEngine };
-const ORDER = ['synth', 'samples', 'midi'];
-let engineKey = 'synth';
-let engine = ENGINES[engineKey];
-function switchEngine(key) {
-  if (!ENGINES[key]) return;
-  if (!running) { engineKey = key; engine = ENGINES[key]; updateSoundLabel(); return; }
-  if (key === engineKey) return;
-  engine.stop?.();
-  engineKey = key; engine = ENGINES[key]; engine.start();
+// engines STACK — synth + samples layer together (a fuller body); midi sends out
+const COMBOS = [['synth'], ['synth', 'samples'], ['samples'], ['synth', 'midi'], ['midi']];
+let comboIdx = 0;
+const activeEngines = new Set();                 // engine keys currently started
+function setCombo(idx) {
+  comboIdx = ((idx % COMBOS.length) + COMBOS.length) % COMBOS.length;
+  const target = new Set(COMBOS[comboIdx]);
+  for (const k of [...activeEngines]) if (!target.has(k)) { ENGINES[k].stop?.(); activeEngines.delete(k); }
+  for (const k of target) if (!activeEngines.has(k)) { ENGINES[k].start(); activeEngines.add(k); }
   updateSoundLabel();
 }
 function updateSoundLabel() {
-  const b = document.getElementById('sound');
-  if (!b) return;
-  const names = { synth: 'Synth', samples: 'Samples', midi: 'MIDI' };
-  let t = 'Sound · ' + names[engineKey];
-  if (engineKey === 'midi') t += MidiEngine.portName ? ' · ' + MidiEngine.portName : ' · no port';
+  const b = document.getElementById('sound'); if (!b) return;
+  const NM = { synth: 'Synth', samples: 'Samples', midi: 'MIDI' };
+  let t = 'Sound · ' + COMBOS[comboIdx].map((k) => NM[k]).join(' + ');
+  if (activeEngines.has('midi')) t += MidiEngine.portName ? ' · ' + MidiEngine.portName : ' · no port';
   b.textContent = t;
 }
 
@@ -693,7 +692,7 @@ function loop(now) {
     if (results) interpret(results, now / 1000);
   }
   Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
-  if (running) engine.update(Field);
+  if (running) for (const k of activeEngines) ENGINES[k].update(Field);
   render(video, results, dt);
   requestAnimationFrame(loop);
 }
@@ -709,15 +708,17 @@ async function makeLandmarker() {
 }
 
 const $ = (id) => document.getElementById(id);
+let camMode = new URLSearchParams(location.search).get('cam') === 'user' ? 'user' : 'environment';
+function camLabel() { const b = $('cam-toggle'); if (b) b.textContent = 'Camera · ' + (camMode === 'user' ? 'Front' : 'Rear'); }
 async function begin() {
   if (running) return;
   $('start').disabled = true;
   $('loading').classList.remove('hidden'); $('loading').textContent = 'waking the field…';
   try {
-    engine.start();                                              // capture the user gesture for audio
+    setCombo(comboIdx);                                          // start the chosen engine stack (in the gesture)
     landmarker = await makeLandmarker();
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: 1280, height: 720, frameRate: { ideal: 60 } }, audio: false });
+      video: { facingMode: camMode === 'user' ? 'user' : { ideal: 'environment' }, width: 1280, height: 720, frameRate: { ideal: 60 } }, audio: false });
     video.srcObject = stream; await video.play();
     running = true;
     $('loading').classList.add('hidden');
@@ -739,8 +740,10 @@ function toggleFs() {
 }
 
 $('start').addEventListener('click', begin);
-$('sound').addEventListener('click', () => switchEngine(ORDER[(ORDER.indexOf(engineKey) + 1) % ORDER.length]));
-$('clear').addEventListener('click', () => { if (engine.clearFrozen) engine.clearFrozen(); });
+$('sound').addEventListener('click', () => setCombo(comboIdx + 1));
+$('clear').addEventListener('click', () => SoftSynth.clearFrozen());
+$('cam-toggle').addEventListener('click', () => { camMode = camMode === 'user' ? 'environment' : 'user'; camLabel(); });
+camLabel();
 $('temple').addEventListener('click', () => { Field.temple = !Field.temple; $('temple').classList.toggle('active', Field.temple); });
 $('mode').addEventListener('click', cycleMode);
 $('fs').addEventListener('click', toggleFs);
@@ -749,7 +752,7 @@ addEventListener('keydown', (e) => {
   if (e.key === 'f' || e.key === 'F') toggleFs();
   else if (e.key === 'm' || e.key === 'M') cycleMode();
   else if (e.key === 's' || e.key === 'S') $('sound').click();
-  else if (e.key === 'c' || e.key === 'C') { if (engine.clearFrozen) engine.clearFrozen(); }
+  else if (e.key === 'c' || e.key === 'C') SoftSynth.clearFrozen();
   else if (e.key === 't' || e.key === 'T') $('temple').click();
   else if (e.key === ' ') { e.preventDefault(); $('freeze').click(); }
 });
