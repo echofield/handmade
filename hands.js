@@ -151,7 +151,8 @@ const SoftSynth = (() => {
     osc.sub = mkOsc(); osc.low = mkOsc(); osc.fund = mkOsc(); osc.high = mkOsc(); osc.shim = mkOsc();
     osc.low.detune.value = -7; osc.high.detune.value = 7;
     const g = (v) => { const x = ctx.createGain(); x.gain.value = v; x.connect(voices); return x; };
-    osc.sub.connect(g(0.5)); osc.low.connect(g(0.45)); osc.fund.connect(g(0.6)); osc.high.connect(g(0.45));
+    osc.gSub = ctx.createGain(); osc.gSub.gain.value = 0.5; osc.sub.connect(osc.gSub); osc.gSub.connect(voices);
+    osc.low.connect(g(0.45)); osc.fund.connect(g(0.6)); osc.high.connect(g(0.45));
     osc.gShim = ctx.createGain(); osc.gShim.gain.value = 0; osc.shim.connect(osc.gShim); osc.gShim.connect(voices);
 
     // harmony voice (second fundamental + its octave), gated by Field.harmony
@@ -209,14 +210,16 @@ const SoftSynth = (() => {
     const breathSwell = 1 + (F.temple ? 0.4 : 0.14) * (F.breath - 0.5) * 2;   // inhale rises, exhale settles
     const calmDark = lerp(1, F.temple ? 0.5 : 0.72, F.calm);                  // stillness -> warmer, darker
     const calmPure = lerp(1, 0.4, F.calm);                                    // stillness -> purer (less beating/shimmer)
+    const lowTilt = 1 - F.brightness, highTilt = F.brightness;               // VERTICAL THEREMIN: hand low -> sub/dark, high -> air/fx
     const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;          // closer to camera = more sound
     voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp) * (1 + F.accent * 0.25) * breathSwell, now, 0.12);
     filt.frequency.setTargetAtTime((lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * calmDark * lerp(1, 1.12, F.breath) + F.accent * 3000) * lerp(1, 0.3, F.grasp), now, 0.06);
-    osc.gShim.gain.setTargetAtTime((lerp(0, 0.18, F.brightness) + F.bloom * 0.15) * calmPure, now, 0.25);
+    osc.gShim.gain.setTargetAtTime((lerp(0, 0.28, highTilt) + F.bloom * 0.15) * calmPure, now, 0.25);
+    if (osc.gSub) osc.gSub.gain.setTargetAtTime(lerp(0.5, 1.2, lowTilt) * lerp(1, 0.6, F.grasp), now, 0.12);  // hand drops -> the sub swells up
     osc.low.detune.setTargetAtTime((-7 - (F.twist - 0.5) * 26) * calmPure, now, 0.2);   // calm narrows the chorus -> purer
     osc.high.detune.setTargetAtTime((7 + (F.twist - 0.5) * 26) * calmPure, now, 0.2);
     if (dlyFb) dlyFb.gain.setTargetAtTime(lerp(0.4, 0.6, F.calm), now, 0.5);            // calm opens the space
-    if (dlyMix) dlyMix.gain.setTargetAtTime(lerp(0.5, 0.8, F.calm), now, 0.5);
+    if (dlyMix) dlyMix.gain.setTargetAtTime(lerp(0.5, 0.8, F.calm) + highTilt * 0.15, now, 0.5);  // hand high -> more echo/space
 
     // the recognized pose names a chord; each offset fills one voice slot
     const ch = F.chord || [];
@@ -240,8 +243,8 @@ const SoftSynth = (() => {
     lfoG.gain.setTargetAtTime(vib, now, 0.3);
     lfo.frequency.setTargetAtTime(lerp(4.6, 6.2, F.motion), now, 0.4);
 
-    // openness -> space ; proximity -> drier & more intimate
-    wet.gain.setTargetAtTime(lerp(0.15, 0.8, F.openness) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
+    // openness -> space ; proximity -> drier & more intimate ; hand-height -> reverb bloom
+    wet.gain.setTargetAtTime((lerp(0.15, 0.8, F.openness) + highTilt * 0.35) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
   }
 
