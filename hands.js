@@ -55,6 +55,7 @@ const Field = {
   chord:[],        // semitone offsets from the base note, named by the recognized pose
   register:0,      // octave shift (semitones) from a pose (e.g. thumb-up = +12)
   gesture:'open',  // the recognized hand-pose intent (debounced)
+  melody:0,        // left fist anchors a pedal -> the right hand strikes notes in-key
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -106,7 +107,7 @@ class OneEuro {
 //   • NeuralEngine — DDSP / RAVE timbre conditioned on the Field
 // =====================================================================
 const SoftSynth = (() => {
-  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi, frozen = [], frozenPtr = 0, dlyFb, dlyMix;
+  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi, frozen = [], frozenPtr = 0, dlyFb, dlyMix, leadPtr = 0, lastLeadIdx = -1;
   const osc = {};
   const warmCurve = (d) => {
     const n = 1024, c = new Float32Array(n), k = 1 + d * 3;
@@ -154,6 +155,9 @@ const SoftSynth = (() => {
     osc.gSub = ctx.createGain(); osc.gSub.gain.value = 0.5; osc.sub.connect(osc.gSub); osc.gSub.connect(voices);
     osc.low.connect(g(0.45)); osc.fund.connect(g(0.6)); osc.high.connect(g(0.45));
     osc.gShim = ctx.createGain(); osc.gShim.gain.value = 0; osc.shim.connect(osc.gShim); osc.gShim.connect(voices);
+    // a deep tonic PEDAL — grounds melody mode without freezing the pad's gliding wave
+    osc.pedal = mkOsc(); osc.gPedal = ctx.createGain(); osc.gPedal.gain.value = 0;
+    osc.pedal.connect(osc.gPedal); osc.gPedal.connect(voices);
 
     // harmony voice (second fundamental + its octave), gated by Field.harmony
     hf = mkOsc(); ho = mkOsc(); gh = ctx.createGain(); gh.gain.value = 0;
@@ -188,6 +192,18 @@ const SoftSynth = (() => {
     }
     frozenPtr = 0;
 
+    // MELODY LEAD — a small plucked-voice pool; overlapping tails = an ambient cascade.
+    // Left-fist pedals the drone to the tonic; the right hand strikes these, quantized in-key.
+    osc.lead = [];
+    for (let k = 0; k < 4; k++) {
+      const o = mkOsc(); o.type = 'triangle';
+      const lf = ctx.createBiquadFilter(); lf.type = 'lowpass'; lf.frequency.value = 2800; lf.Q.value = 0.5;
+      const lg = ctx.createGain(); lg.gain.value = 0;
+      o.connect(lf); lf.connect(lg); lg.connect(master); lg.connect(rev);
+      osc.lead.push({ o, lg });
+    }
+    leadPtr = 0; lastLeadIdx = -1;
+
     curMidi = SCALE[(SCALE.length / 2) | 0];
     if (ctx.state === 'suspended') ctx.resume();
     master.gain.linearRampToValueAtTime(0.9, ctx.currentTime + 3);
@@ -196,8 +212,11 @@ const SoftSynth = (() => {
   function update(F) {
     if (!ctx) return; const now = ctx.currentTime;
     const idx = clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1);
-    curMidi += (SCALE[idx] - curMidi) * (F.frozen ? 0.02 : 0.16);   // glide
     const reg = F.register | 0;
+    curMidi += (SCALE[idx] - curMidi) * (F.frozen ? 0.02 : 0.16);             // the PAD WAVE keeps gliding in every mode (preserved)
+    if (F.melody) {
+      if (idx !== lastLeadIdx) { pluckLead(SCALE[idx] + reg); lastLeadIdx = idx; }   // melody: each new degree strikes the pad's note over a deep tonic pedal
+    } else { lastLeadIdx = -1; }
     const f = midiToFreq(curMidi + reg);
     if (F.freezeNow) { freezeVoice(curMidi + reg); F.freezeNow = false; }   // close-hand captured a layer
     osc.sub.frequency.setTargetAtTime(f * 0.5, now, 0.05);
@@ -216,6 +235,7 @@ const SoftSynth = (() => {
     filt.frequency.setTargetAtTime((lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * calmDark * lerp(1, 1.12, F.breath) + F.accent * 3000) * lerp(1, 0.3, F.grasp), now, 0.06);
     osc.gShim.gain.setTargetAtTime((lerp(0, 0.28, highTilt) + F.bloom * 0.15) * calmPure, now, 0.25);
     if (osc.gSub) osc.gSub.gain.setTargetAtTime(lerp(0.5, 1.2, lowTilt) * lerp(1, 0.6, F.grasp), now, 0.12);  // hand drops -> the sub swells up
+    if (osc.pedal) { osc.pedal.frequency.setTargetAtTime(midiToFreq(SCALE[0]), now, 0.1); osc.gPedal.gain.setTargetAtTime(F.melody ? 0.5 : 0, now, 0.3); }  // tonic pedal only while melody mode grounds the pad
     osc.low.detune.setTargetAtTime((-7 - (F.twist - 0.5) * 26) * calmPure, now, 0.2);   // calm narrows the chorus -> purer
     osc.high.detune.setTargetAtTime((7 + (F.twist - 0.5) * 26) * calmPure, now, 0.2);
     if (dlyFb) dlyFb.gain.setTargetAtTime(lerp(0.4, 0.6, F.calm), now, 0.5);            // calm opens the space
@@ -246,6 +266,17 @@ const SoftSynth = (() => {
     // openness -> space ; proximity -> drier & more intimate ; hand-height -> reverb bloom
     wet.gain.setTargetAtTime((lerp(0.15, 0.8, F.openness) + highTilt * 0.35) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
+  }
+
+  function pluckLead(midi) {
+    if (!osc.lead || !osc.lead.length) return;
+    const v = osc.lead[leadPtr % osc.lead.length]; leadPtr++;
+    const now = ctx.currentTime, hz = midiToFreq(midi);
+    v.o.frequency.setTargetAtTime(hz, now, 0.004);
+    v.lg.gain.cancelScheduledValues(now);
+    v.lg.gain.setValueAtTime(Math.max(v.lg.gain.value, 0.0001), now);
+    v.lg.gain.linearRampToValueAtTime(0.32, now + 0.012);          // the strike
+    v.lg.gain.setTargetAtTime(0.0001, now + 0.02, 0.5);            // ring out -> an ambient tail
   }
 
   function freezeVoice(midi) {
@@ -571,6 +602,7 @@ function interpret(results, t) {
   _prevGrasp = Field.grasp;
 
   poseHold(classifyPose(fingerExt(chord.lm, chord.m)));           // discrete shape from the chord hand
+  Field.melody = (hands.length >= 2 && Field.gesture === 'fist') ? 1 : 0;   // left fist anchors -> the right hand plays melody
 }
 
 // =====================================================================
@@ -633,6 +665,7 @@ function render(video, results, dt) {
   } else { ctx2.fillStyle = '#06070a'; ctx2.fillRect(0, 0, W, H); }
   ctx2.fillStyle = 'rgba(6,7,10,0.5)'; ctx2.fillRect(0, 0, W, H);   // veil
   drawBreath();
+  if (Field.melody) drawGrid();                                     // melody mode: reveal the in-key note zones to aim at
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
