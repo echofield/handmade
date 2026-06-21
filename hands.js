@@ -50,11 +50,25 @@ const Field = {
   interval:7,      // semitones of the harmony voice
   stillness:1.0,   // derived: how settled the hand is
   grasp:0.0,       // fist: fingers curled -> choke / intimacy
-  voicing:0.0,     // how many fingers extended -> chord richness (0..1)
+  voicing:0.0,     // (legacy) finger count
   pinch:0.0,       // thumb + index together -> a summoned star
+  chord:[],        // semitone offsets from the base note, named by the recognized pose
+  register:0,      // octave shift (semitones) from a pose (e.g. thumb-up = +12)
+  gesture:'open',  // the recognized hand-pose intent (debounced)
+  accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
+  bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
+  twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
+  body:0.0,        // transient: a rhythmic onset -> a low body thump (pulse)
+  tempo:0.6,       // seconds between onsets -> the hand's rhythm
+  freezeNow:false, // one-shot: close-hand edge -> capture a frozen layer
+  breath:0.5,      // the temple's slow breath (~5.5/min) -> swell; breathe with it
+  calm:0.4,        // sustained stillness -> coherence, rewarded with resolution
+  temple:false,    // healing mode: deepen breath + resolution, dim and warm
+  union:0.0,       // two hands brought together -> a binaural entrainment beat
+  beat:8.0,        // binaural beat frequency (Hz), set by the hand-gap
   root:9, mode:'aeolian', hands:0, frozen:false,
 };
-const scaleNotes = (root, mode) => {
+const scaleNotes = (root, mode) => {                 // three octaves -> smooth, continuous glide
   const iv = MODES[mode], base = 33 + root, out = [];
   for (let k = 0; k < 3; k++) for (const s of iv) out.push(base + 12 * k + s);
   return out;
@@ -92,7 +106,7 @@ class OneEuro {
 //   • NeuralEngine — DDSP / RAVE timbre conditioned on the Field
 // =====================================================================
 const SoftSynth = (() => {
-  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi;
+  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi, frozen = [], frozenPtr = 0, dlyFb, dlyMix;
   const osc = {};
   const warmCurve = (d) => {
     const n = 1024, c = new Float32Array(n), k = 1 + d * 3;
@@ -124,6 +138,11 @@ const SoftSynth = (() => {
     warm.connect(dry); warm.connect(rev);
     dry.connect(master); rev.connect(wet); wet.connect(master);
     master.connect(comp); comp.connect(ctx.destination);
+    // a feedback delay ties everything into continuity — echoes, spark tails, space
+    const delay = ctx.createDelay(1.0); delay.delayTime.value = 0.38;
+    dlyFb = ctx.createGain(); dlyFb.gain.value = 0.4;
+    dlyMix = ctx.createGain(); dlyMix.gain.value = 0.5;
+    master.connect(delay); delay.connect(dlyFb); dlyFb.connect(delay); delay.connect(dlyMix); dlyMix.connect(comp);
 
     lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 5.2;
     lfoG = ctx.createGain(); lfoG.gain.value = 0; lfo.connect(lfoG); lfo.start();
@@ -147,6 +166,26 @@ const SoftSynth = (() => {
     // a high "star" summoned by a pinch
     osc.star = mkOsc(); osc.gStar = ctx.createGain(); osc.gStar.gain.value = 0;
     osc.star.connect(osc.gStar); osc.gStar.connect(voices);
+    // a low "body" thump on each rhythmic onset (the hand's pulse / heartbeat)
+    osc.body = mkOsc(); osc.gBody = ctx.createGain(); osc.gBody.gain.value = 0;
+    osc.body.connect(osc.gBody); osc.gBody.connect(voices);
+    // BINAURAL PAIR — bring the two hands together to bloom an entrainment beat.
+    // Hard-panned L/R (needs headphones), routed clean to master so the channels stay pure.
+    const panL = ctx.createStereoPanner(); panL.pan.value = -1;
+    const panR = ctx.createStereoPanner(); panR.pan.value = 1;
+    osc.bl = mkOsc(); osc.br = mkOsc(); osc.gBin = ctx.createGain(); osc.gBin.gain.value = 0;
+    osc.bl.connect(panL); osc.br.connect(panR); panL.connect(osc.gBin); panR.connect(osc.gBin); osc.gBin.connect(master);
+
+    // FROZEN LAYERS — close the hand to capture the live note into a sustained voice;
+    // layers stack into an evolving polyphonic drone (round-robin pool of 6)
+    frozen = [];
+    for (let k = 0; k < 6; k++) {
+      const a = mkOsc(), b = mkOsc(); b.detune.value = 6;
+      const fg = ctx.createGain(); fg.gain.value = 0;
+      a.connect(fg); b.connect(fg); fg.connect(master); fg.connect(rev);
+      frozen.push({ a, b, fg });
+    }
+    frozenPtr = 0;
 
     curMidi = SCALE[(SCALE.length / 2) | 0];
     if (ctx.state === 'suspended') ctx.resume();
@@ -157,31 +196,44 @@ const SoftSynth = (() => {
     if (!ctx) return; const now = ctx.currentTime;
     const idx = clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1);
     curMidi += (SCALE[idx] - curMidi) * (F.frozen ? 0.02 : 0.16);   // glide
-    const f = midiToFreq(curMidi);
+    const reg = F.register | 0;
+    const f = midiToFreq(curMidi + reg);
+    if (F.freezeNow) { freezeVoice(curMidi + reg); F.freezeNow = false; }   // close-hand captured a layer
     osc.sub.frequency.setTargetAtTime(f * 0.5, now, 0.05);
     osc.low.frequency.setTargetAtTime(f, now, 0.05);
     osc.fund.frequency.setTargetAtTime(f, now, 0.05);
     osc.high.frequency.setTargetAtTime(f, now, 0.05);
     osc.shim.frequency.setTargetAtTime(f * 2, now, 0.05);
-    const hzH = midiToFreq(curMidi + F.interval);
-    hf.frequency.setTargetAtTime(hzH, now, 0.08); ho.frequency.setTargetAtTime(hzH * 2, now, 0.08);
-    gh.gain.setTargetAtTime(0.32 * F.harmony, now, 0.3);
+    gh.gain.setTargetAtTime(0, now, 0.3);                          // (legacy harmony voice retired)
 
-    const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;
-    voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp), now, 0.12);   // fist chokes
-    filt.frequency.setTargetAtTime(lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * lerp(1, 0.3, F.grasp), now, 0.08);
-    osc.gShim.gain.setTargetAtTime(lerp(0, 0.18, F.brightness), now, 0.25);
+    const breathSwell = 1 + (F.temple ? 0.4 : 0.14) * (F.breath - 0.5) * 2;   // inhale rises, exhale settles
+    const calmDark = lerp(1, F.temple ? 0.5 : 0.72, F.calm);                  // stillness -> warmer, darker
+    const calmPure = lerp(1, 0.4, F.calm);                                    // stillness -> purer (less beating/shimmer)
+    const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;          // closer to camera = more sound
+    voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp) * (1 + F.accent * 0.25) * breathSwell, now, 0.12);
+    filt.frequency.setTargetAtTime((lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * calmDark * lerp(1, 1.12, F.breath) + F.accent * 3000) * lerp(1, 0.3, F.grasp), now, 0.06);
+    osc.gShim.gain.setTargetAtTime((lerp(0, 0.18, F.brightness) + F.bloom * 0.15) * calmPure, now, 0.25);
+    osc.low.detune.setTargetAtTime((-7 - (F.twist - 0.5) * 26) * calmPure, now, 0.2);   // calm narrows the chorus -> purer
+    osc.high.detune.setTargetAtTime((7 + (F.twist - 0.5) * 26) * calmPure, now, 0.2);
+    if (dlyFb) dlyFb.gain.setTargetAtTime(lerp(0.4, 0.6, F.calm), now, 0.5);            // calm opens the space
+    if (dlyMix) dlyMix.gain.setTargetAtTime(lerp(0.5, 0.8, F.calm), now, 0.5);
 
-    // finger-voicing reveals a modal chord; a pinch summons a high star
-    const sc = MODES[F.mode];
-    osc.v3.frequency.setTargetAtTime(midiToFreq(curMidi + sc[2]), now, 0.06);
-    osc.v5.frequency.setTargetAtTime(midiToFreq(curMidi + sc[4]), now, 0.06);
-    osc.v8.frequency.setTargetAtTime(midiToFreq(curMidi + 12), now, 0.06);
-    osc.g3.gain.setTargetAtTime(clamp((F.voicing - 0.2) / 0.3, 0, 1) * 0.30, now, 0.25);
-    osc.g5.gain.setTargetAtTime(clamp((F.voicing - 0.45) / 0.3, 0, 1) * 0.26, now, 0.25);
-    osc.g8.gain.setTargetAtTime(clamp((F.voicing - 0.7) / 0.3, 0, 1) * 0.22, now, 0.25);
-    osc.star.frequency.setTargetAtTime(f * 4, now, 0.05);
+    // the recognized pose names a chord; each offset fills one voice slot
+    const ch = F.chord || [];
+    const slot = [[osc.v3, osc.g3], [osc.v5, osc.g5], [osc.v8, osc.g8]];
+    for (let i = 0; i < slot.length; i++) {
+      const [o, gg] = slot[i];
+      if (i < ch.length) { o.frequency.setTargetAtTime(midiToFreq(curMidi + reg + ch[i]), now, 0.06); gg.gain.setTargetAtTime(0.26, now, 0.25); }
+      else gg.gain.setTargetAtTime(0, now, 0.25);
+    }
+    osc.star.frequency.setTargetAtTime(f * 4, now, 0.05);          // pinch summons a star
     osc.gStar.gain.setTargetAtTime(lerp(0, 0.22, F.pinch), now, 0.15);
+    osc.body.frequency.setTargetAtTime(f * 0.5, now, 0.03);        // rhythmic body thump (pulse)
+    osc.gBody.gain.setTargetAtTime(F.body * 0.45, now, 0.04);
+    const cHz = clamp(midiToFreq(curMidi + reg), 110, 480);        // binaural carrier (<1000 Hz)
+    osc.bl.frequency.setTargetAtTime(cHz - F.beat / 2, now, 0.1);  // hands together -> a beat inside the skull
+    osc.br.frequency.setTargetAtTime(cHz + F.beat / 2, now, 0.1);
+    osc.gBin.gain.setTargetAtTime(lerp(0, 0.4, F.union), now, 0.4);
 
     // motion -> vibrato; stillness settles it back toward rest
     const vib = F.frozen ? 1.0 : lerp(1.5, 26, F.motion) * lerp(1, 0.3, F.stillness);
@@ -189,17 +241,30 @@ const SoftSynth = (() => {
     lfo.frequency.setTargetAtTime(lerp(4.6, 6.2, F.motion), now, 0.4);
 
     // openness -> space ; proximity -> drier & more intimate
-    wet.gain.setTargetAtTime(lerp(0.15, 0.8, F.openness) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp), now, 0.3);
+    wet.gain.setTargetAtTime(lerp(0.15, 0.8, F.openness) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
   }
 
+  function freezeVoice(midi) {
+    if (!frozen.length) return;
+    const v = frozen[frozenPtr % frozen.length]; frozenPtr++;
+    const now = ctx.currentTime, hz = midiToFreq(midi);
+    v.a.frequency.setTargetAtTime(hz, now, 0.05);
+    v.b.frequency.setTargetAtTime(hz, now, 0.05);
+    v.fg.gain.cancelScheduledValues(now);
+    v.fg.gain.setTargetAtTime(0.14, now, 0.6);   // capture the note, fade it in, hold it
+  }
+  function clearFrozen() {
+    if (!ctx) return; const now = ctx.currentTime;
+    for (const v of frozen) v.fg.gain.setTargetAtTime(0, now, 0.8);
+  }
   function stop() {
     if (!ctx) return; const c = ctx;
     master.gain.cancelScheduledValues(c.currentTime);
     master.gain.setTargetAtTime(0, c.currentTime, 0.15);
     setTimeout(() => c.close(), 500); ctx = null;
   }
-  return { start, update, stop, get ready() { return !!ctx; } };
+  return { start, update, stop, clearFrozen, get ready() { return !!ctx; } };
 })();
 
 // =====================================================================
@@ -297,16 +362,19 @@ const SampleEngine = (() => {
     if (!ctx || !loaded) return; const now = ctx.currentTime;
     const idx = clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1);
     curMidi += (SCALE[idx] - curMidi) * (F.frozen ? 0.02 : 0.16);
-    for (const k in L) setRate(L[k], curMidi);
-    if (L.harmony) setRate(L.harmony, curMidi + F.interval);
-    const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;
+    const reg = F.register | 0;
+    const ch = F.chord || [];
+    const top = ch.length ? ch[ch.length - 1] : 0;                // sample chord uses the top tone (v1)
+    for (const k in L) setRate(L[k], curMidi + reg);
+    if (L.harmony) setRate(L.harmony, curMidi + reg + top);
+    const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;   // closer to camera = more sound
     voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp), now, 0.12);   // fist chokes
     if (L.sub) L.sub.gain.gain.setTargetAtTime(0.55, now, 0.3);
     if (L.pad) L.pad.gain.gain.setTargetAtTime(0.6, now, 0.3);
-    if (L.air) L.air.gain.gain.setTargetAtTime(lerp(0.0, 0.5, F.brightness) + 0.25 * F.voicing + 0.3 * F.pinch, now, 0.25);
-    if (L.harmony) L.harmony.gain.gain.setTargetAtTime(0.5 * Math.max(F.harmony, F.voicing * 0.6), now, 0.3);
+    if (L.air) L.air.gain.gain.setTargetAtTime(lerp(0.0, 0.5, F.brightness) + 0.3 * F.pinch, now, 0.25);
+    if (L.harmony) L.harmony.gain.gain.setTargetAtTime(ch.length ? 0.5 : 0.0, now, 0.3);
     filt.frequency.setTargetAtTime(lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * lerp(1, 0.3, F.grasp), now, 0.08);
-    wet.gain.setTargetAtTime(lerp(0.15, 0.8, F.openness) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp), now, 0.3);
+    wet.gain.setTargetAtTime(lerp(0.15, 0.8, F.openness) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
   }
 
@@ -346,16 +414,11 @@ const MidiEngine = (() => {
   }
   function update(F) {
     if (!ready || !out) return;
-    const base = SCALE[clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1)];
-    const sc = MODES[F.mode];
+    const base = SCALE[clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1)] + (F.register | 0);
     const want = new Set();
-    if (F.frozen || F.intensity > 0.05) {           // chord built from finger-voicing
+    if (F.frozen || F.intensity > 0.06) {           // closer to camera = sounding
       want.add(base);
-      if (F.voicing > 0.25) want.add(base + sc[2]);
-      if (F.voicing > 0.50) want.add(base + sc[4]);
-      if (F.voicing > 0.75) want.add(base + 12);
-      if (F.harmony > 0.5) want.add(base + F.interval);
-      if (F.pinch > 0.55) want.add(base + 24);
+      for (const off of (F.chord || [])) want.add(base + off);
     }
     const vel = clamp((20 + F.intensity * 107) | 0, 1, 127);
     for (const n of held) if (!want.has(n)) { noteOff(n); held.delete(n); }
@@ -411,47 +474,101 @@ function metrics(lm) {
   return { px, py, size, open: (o / TIPS.length) / size };
 }
 
+// pose classifier — finger extension ratios -> a named hand shape (a small
+// grasp taxonomy: power / precision / intermediate, after Feix et al.)
+function fingerExt(lm, m) {
+  const ext = (tip) => Math.hypot(lm[tip].x - m.px, lm[tip].y - m.py) / m.size;
+  return [ext(4), ext(8), ext(12), ext(16), ext(20)];            // [thumb, index, middle, ring, pinky]
+}
+function classifyPose(e) {
+  const TH = 1.05, th = e[0] > 0.95;
+  const up = [e[1] > TH, e[2] > TH, e[3] > TH, e[4] > TH];
+  const n = up.filter(Boolean).length;
+  if ([1, 2, 3, 4].every((k) => e[k] > 0.80 && e[k] <= TH)) return 'claw';   // all four half-curled = spherical
+  if (n === 0) return th ? 'thumb' : 'fist';
+  if (n === 1 && up[0]) return th ? 'L' : 'point';
+  if (n === 2 && up[0] && up[1]) return 'peace';
+  if (n === 3 && up[0] && up[1] && up[2]) return 'three';
+  if (n === 4) return 'open';
+  return n === 1 ? 'point' : n === 2 ? 'peace' : n === 3 ? 'three' : 'open';
+}
+// each pose names a chord (semitone offsets) + a register; debounced so only a
+// DELIBERATE, held shape becomes an intent (no flicker on the way to it)
+let _posePending = 'open', _poseStable = 0, _lastOnset = 0, _prevGrasp = 0, _prevUnion = 0;
+function poseHold(raw) {
+  if (raw === _posePending) _poseStable++; else { _posePending = raw; _poseStable = 0; }
+  if (_poseStable >= 5 && Field.gesture !== _posePending) {
+    Field.gesture = _posePending;
+    const sc = MODES[Field.mode];
+    const M = {
+      fist: [[], 0], point: [[], 0], peace: [[7], 0], three: [[sc[2], 7], 0],
+      open: [[sc[2], 7, sc[6]], 0], thumb: [[7], 12], claw: [[2, 7], 0], L: [[7, 12], 0],
+    };
+    const g = M[_posePending] || M.open;
+    Field.chord = g[0]; Field.register = g[1];
+  }
+}
+
 function interpret(results, t) {
   const hands = (results && results.landmarks) || [];
   Field.hands = hands.length;
+  Field.accent *= 0.88; Field.bloom *= 0.92; Field.body *= 0.82;  // transients fade every frame
   if (hands.length === 0) {
     Field.intensity = lerp(Field.intensity, 0, 0.05);
-    Field.harmony = lerp(Field.harmony, 0, 0.05);
     Field.motion = lerp(Field.motion, 0, 0.06);
     Field.stillness = lerp(Field.stillness, 1, 0.05);
     Field.grasp = lerp(Field.grasp, 0, 0.08);
-    Field.voicing = lerp(Field.voicing, 0, 0.08);
     Field.pinch = lerp(Field.pinch, 0, 0.1);
+    Field.calm = lerp(Field.calm, 0.85, 0.008);                   // rest -> coherence rises
+    poseHold('open');
     return;                                   // pitch & co. hold where they were
   }
-  const lm = hands[0];
-  const m = metrics(lm);
-  Field.pitch = clamp(fPitch.filter(1 - m.px, t), 0, 1);          // mirror to match display
-  Field.brightness = clamp(fBright.filter(1 - m.py, t), 0, 1);    // higher hand = brighter
-  Field.intensity = clamp(fBody.filter(clamp((m.size - 0.10) / 0.26, 0, 1), t), 0, 1);
-  Field.proximity = Field.intensity;                              // closer hand = bigger = nearer
-  Field.openness = clamp(fOpen.filter(clamp((m.open - 0.7) / 1.0, 0, 1), t), 0, 1);
+  // roles: the right-of-screen hand PLAYS (pitch/dynamics); the left-of-screen hand SHAPES the chord
+  const present = hands.map((h) => ({ lm: h, m: metrics(h) }));
+  let voice, chord;
+  if (present.length >= 2) {
+    present.sort((a, b) => (1 - a.m.px) - (1 - b.m.px));
+    chord = present[0]; voice = present[present.length - 1];
+  } else { voice = present[0]; chord = present[0]; }
 
-  // finger detail — fist (choke/intimacy), finger-voicing (chord richness), pinch (a star)
-  let nExt = 0;
-  for (const tip of TIPS) if (Math.hypot(lm[tip].x - m.px, lm[tip].y - m.py) / m.size > 1.05) nExt++;
+  // hands brought together -> a binaural entrainment beat (the gap sets the beat)
+  if (present.length >= 2) {
+    const d = Math.hypot(present[0].m.px - present[1].m.px, present[0].m.py - present[1].m.py);
+    Field.union = clamp(1 - (d - 0.12) / 0.5, 0, 1);              // 1 when the palms nearly meet
+  } else Field.union = lerp(Field.union, 0, 0.12);
+  Field.beat = lerp(14, 4, Field.union);                          // apart = fast · together = theta
+  if (_prevUnion < 0.85 && Field.union >= 0.85) { Field.bloom = 1; Field.calm = Math.min(1, Field.calm + 0.2); }   // the meeting
+  _prevUnion = Field.union;
+
+  const m = voice.m, lm = voice.lm;                               // continuous expression
+  Field.pitch = clamp(fPitch.filter(1 - m.px, t), 0, 1);
+  Field.brightness = clamp(fBright.filter(1 - m.py, t), 0, 1);
+  Field.intensity = clamp(fBody.filter(clamp((m.size - 0.10) / 0.26, 0, 1), t), 0, 1);
+  Field.proximity = Field.intensity;
+  Field.openness = clamp(fOpen.filter(clamp((m.open - 0.7) / 1.0, 0, 1), t), 0, 1);
   Field.grasp = lerp(Field.grasp, clamp((1.0 - m.open) / 0.5, 0, 1), 0.2);
-  Field.voicing = lerp(Field.voicing, nExt / 4, 0.12);
   const pinchD = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / m.size;
   Field.pinch = lerp(Field.pinch, clamp((0.45 - pinchD) / 0.35, 0, 1), 0.25);
-
-  fPx.filter(m.px, t); fPy.filter(m.py, t);                       // drive velocity estimate
+  fPx.filter(m.px, t); fPy.filter(m.py, t);
   const mot = clamp((fPx.speed + fPy.speed) * 0.6, 0, 1);
   Field.motion = lerp(Field.motion, mot, 0.3);
   Field.stillness = lerp(Field.stillness, 1 - clamp(mot * 1.4, 0, 1), 0.1);
+  Field.calm = lerp(Field.calm, Field.stillness, 0.012);          // coherence builds slowly from stillness
 
-  if (hands.length >= 2) {                                        // two hands -> harmony
-    const m2 = metrics(hands[1]);
-    Field.interval = INTERVALS[clamp((m2.py * 4) | 0, 0, 3)];     // second hand height picks interval
-    Field.harmony = lerp(Field.harmony, 1, 0.06);
-  } else {
-    Field.harmony = lerp(Field.harmony, 0, 0.06);
+  // ---- MOVEMENT EVENTS (the verbs): twist · swipe-stroke · grasp · release ----
+  const ang = Math.atan2(lm[9].y - lm[0].y, lm[9].x - lm[0].x);
+  Field.twist = lerp(Field.twist, (ang + Math.PI) / (2 * Math.PI), 0.15);                   // wrist rotation
+  const vmag = Math.hypot(fPx.dx, fPy.dx);
+  if (vmag > 1.3 && t - _lastOnset > 0.16) {                                                  // a rhythmic onset
+    Field.body = 1; const per = t - _lastOnset;                                               // -> body thump + tempo
+    if (per > 0.15 && per < 2.0) Field.tempo = lerp(Field.tempo, per, 0.4);
+    _lastOnset = t; if (vmag > 2.2) Field.accent = 1;                                          // a hard swipe also accents
   }
+  if (_prevGrasp < 0.5 && Field.grasp >= 0.5) { Field.accent = Math.max(Field.accent, 0.6); Field.freezeNow = true; }   // close hand -> freeze a layer
+  if (_prevGrasp >= 0.5 && Field.grasp < 0.5) Field.bloom = 1;                               // release bloom
+  _prevGrasp = Field.grasp;
+
+  poseHold(classifyPose(fingerExt(chord.lm, chord.m)));           // discrete shape from the chord hand
 }
 
 // =====================================================================
@@ -472,18 +589,40 @@ function drawSkeleton(lm, hue) {
   for (const p of lm) { ctx2.beginPath(); ctx2.arc((1 - p.x) * W, p.y * H, 3.0, 0, TAU); ctx2.fill(); }
 }
 
+// the playable scale as visible vertical zones — aim at a note, see where you are
+function drawGrid() {
+  const n = SCALE.length, bw = W / n, idx = clamp((Field.pitch * n) | 0, 0, n - 1), hue = HUE[Field.mode] || 215;
+  for (let i = 0; i < n; i++) {
+    const x = i * bw, on = i === idx && Field.hands > 0;
+    ctx2.fillStyle = on ? `hsla(${hue},60%,60%,${0.10 + 0.22 * Field.pinch})` : 'rgba(236,231,218,0.025)';
+    ctx2.fillRect(x + 1, 0, bw - 2, H);
+    ctx2.fillStyle = on ? 'rgba(236,231,218,.95)' : 'rgba(236,231,218,.32)';
+    ctx2.font = (on ? 'bold ' : '') + '12px Georgia'; ctx2.textAlign = 'center';
+    ctx2.fillText(NOTE_NAMES[SCALE[i] % 12], x + bw / 2, H - 28);
+  }
+}
+// the temple's breath — a slow halo to breathe with; warms gold as coherence rises
+function drawBreath() {
+  const cx = W / 2, cy = H / 2, base = Math.min(W, H) * 0.16;
+  const r = base * (0.7 + 0.5 * Field.breath) * (1 + 0.4 * Field.calm);
+  const warm = lerp(210, 45, Field.calm);            // agitated = cool blue · calm = warm gold
+  const a = (Field.temple ? 0.16 : 0.06) + 0.10 * Field.calm;
+  ctx2.globalCompositeOperation = 'lighter';
+  const g = ctx2.createRadialGradient(cx, cy, 0, cx, cy, r);
+  g.addColorStop(0, `hsla(${warm}, 70%, 70%, ${a})`);
+  g.addColorStop(1, `hsla(${warm}, 70%, 60%, 0)`);
+  ctx2.fillStyle = g; ctx2.beginPath(); ctx2.arc(cx, cy, r, 0, TAU); ctx2.fill();
+  ctx2.globalCompositeOperation = 'source-over';
+}
+const GESTURE_WORD = { fist: 'muted', point: 'a single voice', peace: 'a fifth', three: 'a triad', open: 'open seventh', thumb: 'lifted', claw: 'suspended', L: 'wide' };
 function statusWord() {
   if (Field.frozen) return 'held';
-  if (Field.hands === 0) return 'waiting';
-  if (Field.pinch > 0.55) return 'a star';
-  if (Field.grasp > 0.6) return 'grasped';
-  if (Field.hands >= 2) return 'harmonising';
-  if (Field.voicing > 0.7) return 'blooming';
-  if (Field.motion > 0.5) return 'drifting';
-  if (Field.proximity > 0.6) return 'close';
-  if (Field.openness > 0.6) return 'vast';
-  if (Field.stillness > 0.85) return 'settled';
-  return 'sounding';
+  if (Field.hands === 0) return Field.temple ? 'breathe' : 'waiting';
+  if (Field.union > 0.7) return 'union';
+  if (Field.bloom > 0.5) return 'bloom';
+  const note = NOTE_NAMES[SCALE[clamp((Field.pitch * SCALE.length) | 0, 0, SCALE.length - 1)] % 12];
+  const g = GESTURE_WORD[Field.gesture] || Field.gesture;
+  return note + ' · ' + g;                                  // the note flowing + the chord shape
 }
 
 function render(video, results, dt) {
@@ -491,6 +630,7 @@ function render(video, results, dt) {
     ctx2.save(); ctx2.translate(W, 0); ctx2.scale(-1, 1); ctx2.globalAlpha = 0.5; ctx2.drawImage(video, 0, 0, W, H); ctx2.restore(); ctx2.globalAlpha = 1;
   } else { ctx2.fillStyle = '#06070a'; ctx2.fillRect(0, 0, W, H); }
   ctx2.fillStyle = 'rgba(6,7,10,0.5)'; ctx2.fillRect(0, 0, W, H);   // veil
+  drawBreath();
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
@@ -508,6 +648,19 @@ function render(video, results, dt) {
 
   ctx2.globalCompositeOperation = 'source-over';
   for (const lm of hands) drawSkeleton(lm, hue);
+
+  if (hands.length >= 2 && Field.union > 0.05) {                   // a light bridge as the hands meet
+    const a = metrics(hands[0]), b = metrics(hands[1]);
+    const ax = (1 - a.px) * W, ay = a.py * H, bx = (1 - b.px) * W, by = b.py * H;
+    ctx2.globalCompositeOperation = 'lighter';
+    ctx2.strokeStyle = `hsla(45, 80%, 75%, ${0.2 + 0.5 * Field.union})`;
+    ctx2.lineWidth = 1 + 5 * Field.union; ctx2.beginPath(); ctx2.moveTo(ax, ay); ctx2.lineTo(bx, by); ctx2.stroke();
+    const mx = (ax + bx) / 2, my = (ay + by) / 2, rr = 20 + 90 * Field.union;
+    const ug = ctx2.createRadialGradient(mx, my, 0, mx, my, rr);
+    ug.addColorStop(0, `hsla(45, 90%, 80%, ${0.5 * Field.union})`); ug.addColorStop(1, 'hsla(45,90%,70%,0)');
+    ctx2.fillStyle = ug; ctx2.beginPath(); ctx2.arc(mx, my, rr, 0, TAU); ctx2.fill();
+    ctx2.globalCompositeOperation = 'source-over';
+  }
 
   if (Field.pinch > 0.15 && hands[0]) {                            // a summoned star at the pinch
     const h0 = hands[0], sx = (1 - (h0[4].x + h0[8].x) / 2) * W, sy = ((h0[4].y + h0[8].y) / 2) * H, rr = 6 + Field.pinch * 26;
@@ -539,6 +692,7 @@ function loop(now) {
     try { results = landmarker.detectForVideo(video, now); } catch (e) { /* timestamp race — skip */ }
     if (results) interpret(results, now / 1000);
   }
+  Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
   if (running) engine.update(Field);
   render(video, results, dt);
   requestAnimationFrame(loop);
@@ -586,6 +740,8 @@ function toggleFs() {
 
 $('start').addEventListener('click', begin);
 $('sound').addEventListener('click', () => switchEngine(ORDER[(ORDER.indexOf(engineKey) + 1) % ORDER.length]));
+$('clear').addEventListener('click', () => { if (engine.clearFrozen) engine.clearFrozen(); });
+$('temple').addEventListener('click', () => { Field.temple = !Field.temple; $('temple').classList.toggle('active', Field.temple); });
 $('mode').addEventListener('click', cycleMode);
 $('fs').addEventListener('click', toggleFs);
 $('freeze').addEventListener('click', () => { Field.frozen = !Field.frozen; $('freeze').classList.toggle('active', Field.frozen); });
@@ -593,5 +749,7 @@ addEventListener('keydown', (e) => {
   if (e.key === 'f' || e.key === 'F') toggleFs();
   else if (e.key === 'm' || e.key === 'M') cycleMode();
   else if (e.key === 's' || e.key === 'S') $('sound').click();
+  else if (e.key === 'c' || e.key === 'C') { if (engine.clearFrozen) engine.clearFrozen(); }
+  else if (e.key === 't' || e.key === 'T') $('temple').click();
   else if (e.key === ' ') { e.preventDefault(); $('freeze').click(); }
 });
