@@ -110,7 +110,7 @@ const SoftSynth = (() => {
   const mkOsc = () => { const o = ctx.createOscillator(); o.type = 'sine'; lfoG.connect(o.detune); o.start(); return o; };
 
   function start() {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     master = ctx.createGain(); master.gain.value = 0;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.knee.value = 22; comp.ratio.value = 3; comp.attack.value = 0.05; comp.release.value = 0.4;
@@ -264,7 +264,7 @@ const SampleEngine = (() => {
   }
 
   function start() {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     master = ctx.createGain(); master.gain.value = 0;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.knee.value = 22; comp.ratio.value = 3; comp.attack.value = 0.05; comp.release.value = 0.4;
@@ -320,10 +320,61 @@ const SampleEngine = (() => {
 })();
 
 // engines share one contract; swap them live (the whole point of the Field)
-const ENGINES = { synth: SoftSynth, samples: SampleEngine };
+// =====================================================================
+// MIDI ENGINE (swappable) — the Field plays a real DAW.
+// WebMIDI out: a chord from finger-voicing, velocity from intensity,
+// CC1=motion · CC74=brightness · CC11=intensity (fist softens) · CC91=space.
+// Route through a virtual port (loopMIDI on Windows, IAC on Mac) into
+// Ableton / Vital / Serum. Chromium + secure context. It makes no sound of
+// its own — the DAW does. Same start()/update(Field) contract as the rest.
+// =====================================================================
+const MidiEngine = (() => {
+  let access = null, out = null, ready = false;
+  const CH = 0, held = new Set(), ccLast = {};
+  const send = (a) => { if (out) out.send(a); };
+  const noteOn = (n, v) => send([0x90 | CH, n & 127, v & 127]);
+  const noteOff = (n) => send([0x80 | CH, n & 127, 0]);
+  const cc = (num, val) => { const v = clamp(val | 0, 0, 127); if (out && ccLast[num] !== v) { send([0xB0 | CH, num, v]); ccLast[num] = v; } };
+
+  function pickOutput() { out = access ? [...access.outputs.values()][0] || null : null; updateSoundLabel(); }
+  async function start() {
+    held.clear();
+    try {
+      access = await navigator.requestMIDIAccess({ sysex: false });
+      access.onstatechange = pickOutput; pickOutput(); ready = true;
+    } catch (e) { console.warn('WebMIDI unavailable/denied', e); ready = false; updateSoundLabel(); }
+  }
+  function update(F) {
+    if (!ready || !out) return;
+    const base = SCALE[clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1)];
+    const sc = MODES[F.mode];
+    const want = new Set();
+    if (F.frozen || F.intensity > 0.05) {           // chord built from finger-voicing
+      want.add(base);
+      if (F.voicing > 0.25) want.add(base + sc[2]);
+      if (F.voicing > 0.50) want.add(base + sc[4]);
+      if (F.voicing > 0.75) want.add(base + 12);
+      if (F.harmony > 0.5) want.add(base + F.interval);
+      if (F.pinch > 0.55) want.add(base + 24);
+    }
+    const vel = clamp((20 + F.intensity * 107) | 0, 1, 127);
+    for (const n of held) if (!want.has(n)) { noteOff(n); held.delete(n); }
+    for (const n of want) if (!held.has(n)) { noteOn(n, vel); held.add(n); }
+    cc(1, F.motion * 127);
+    cc(74, F.brightness * 127);
+    cc(11, F.intensity * (1 - 0.5 * F.grasp) * 127);
+    cc(91, F.openness * 127);
+  }
+  function stop() { for (const n of held) noteOff(n); held.clear(); ready = false; out = null; }
+  return { start, update, stop, get portName() { return out ? out.name : ''; } };
+})();
+
+const ENGINES = { synth: SoftSynth, samples: SampleEngine, midi: MidiEngine };
+const ORDER = ['synth', 'samples', 'midi'];
 let engineKey = 'synth';
 let engine = ENGINES[engineKey];
 function switchEngine(key) {
+  if (!ENGINES[key]) return;
   if (!running) { engineKey = key; engine = ENGINES[key]; updateSoundLabel(); return; }
   if (key === engineKey) return;
   engine.stop?.();
@@ -332,7 +383,11 @@ function switchEngine(key) {
 }
 function updateSoundLabel() {
   const b = document.getElementById('sound');
-  if (b) b.textContent = 'Sound · ' + (engineKey === 'synth' ? 'Synth' : 'Samples');
+  if (!b) return;
+  const names = { synth: 'Synth', samples: 'Samples', midi: 'MIDI' };
+  let t = 'Sound · ' + names[engineKey];
+  if (engineKey === 'midi') t += MidiEngine.portName ? ' · ' + MidiEngine.portName : ' · no port';
+  b.textContent = t;
 }
 
 // =====================================================================
@@ -508,7 +563,7 @@ async function begin() {
     engine.start();                                              // capture the user gesture for audio
     landmarker = await makeLandmarker();
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: 1280, height: 720 }, audio: false });
+      video: { facingMode: { ideal: 'environment' }, width: 1280, height: 720, frameRate: { ideal: 60 } }, audio: false });
     video.srcObject = stream; await video.play();
     running = true;
     $('loading').classList.add('hidden');
@@ -530,7 +585,7 @@ function toggleFs() {
 }
 
 $('start').addEventListener('click', begin);
-$('sound').addEventListener('click', () => switchEngine(engineKey === 'synth' ? 'samples' : 'synth'));
+$('sound').addEventListener('click', () => switchEngine(ORDER[(ORDER.indexOf(engineKey) + 1) % ORDER.length]));
 $('mode').addEventListener('click', cycleMode);
 $('fs').addEventListener('click', toggleFs);
 $('freeze').addEventListener('click', () => { Field.frozen = !Field.frozen; $('freeze').classList.toggle('active', Field.frozen); });
