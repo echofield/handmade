@@ -56,6 +56,7 @@ const Field = {
   register:0,      // octave shift (semitones) from a pose (e.g. thumb-up = +12)
   gesture:'open',  // the recognized hand-pose intent (debounced)
   melody:0,        // left fist anchors a pedal -> the right hand strikes notes in-key
+  chordMode:0,     // hand position plays a full diatonic chord; left pose = the quality
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -105,6 +106,22 @@ const SmartConductor = (() => {
   }
   return { enable, isOn, tick };
 })();
+
+// CHORD MODE — play full diatonic chords by hand position; the left-hand pose picks the
+// quality. Built from the live SCALE so chords stay in-key and follow Smart Mode's key.
+function diatonicChord(idx, pose) {
+  const n = SCALE.length, root = SCALE[clamp(idx, 0, n - 1)];
+  const at = (k) => SCALE[clamp(idx + k, 0, n - 1)] - root;   // diatonic interval, in semitones
+  const third = at(2), fifth = at(4), seventh = at(6);
+  switch (pose) {
+    case 'open':  return [third, fifth, seventh];   // four fingers -> a lush 7th
+    case 'three': return [third, fifth];            // three -> a clean triad
+    case 'peace': return [5, fifth];                // two -> suspended (sus4)
+    case 'point': return [fifth];                   // one -> a bare fifth (power)
+    case 'fist':  return [];                         // fist -> the root alone
+    default:      return [third, fifth];            // triad
+  }
+}
 
 // =====================================================================
 // ONE-EURO FILTER — adaptive de-noiser. Steady when you hold still,
@@ -281,8 +298,8 @@ const SoftSynth = (() => {
     if (dlyFb) dlyFb.gain.setTargetAtTime(lerp(0.4, 0.6, F.calm), now, 0.5);            // calm opens the space
     if (dlyMix) dlyMix.gain.setTargetAtTime(lerp(0.5, 0.8, F.calm) + highTilt * 0.15, now, 0.5);  // hand high -> more echo/space
 
-    // the recognized pose names a chord; each offset fills one voice slot
-    const ch = F.chord || [];
+    // the pose names a chord; in CHORD MODE the hand position plays a full diatonic chord
+    const ch = F.chordMode ? diatonicChord(idx, F.gesture) : (F.chord || []);
     const slot = [[osc.v3, osc.g3], [osc.v5, osc.g5], [osc.v8, osc.g8]];
     for (let i = 0; i < slot.length; i++) {
       const [o, gg] = slot[i];
@@ -747,7 +764,7 @@ function render(video, results, dt) {
   } else { ctx2.fillStyle = '#06070a'; ctx2.fillRect(0, 0, W, H); }
   ctx2.fillStyle = 'rgba(6,7,10,0.5)'; ctx2.fillRect(0, 0, W, H);   // veil
   drawBreath();
-  if (Field.melody) drawGrid();                                     // melody mode: reveal the in-key note zones to aim at
+  if (Field.melody || Field.chordMode) drawGrid();                  // melody/chord mode: reveal the in-key zones to aim at
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
@@ -895,6 +912,7 @@ $('temple').addEventListener('click', () => { Field.temple = !Field.temple; $('t
 $('mode').addEventListener('click', cycleMode);
 $('smart').addEventListener('click', () => { SmartConductor.enable(!SmartConductor.isOn()); $('smart').classList.toggle('active', SmartConductor.isOn()); });
 $('pulse').addEventListener('click', () => { const on = !SoftSynth.pulseOn; SoftSynth.setPulse(on); $('pulse').classList.toggle('active', on); });
+$('chords').addEventListener('click', () => { Field.chordMode = Field.chordMode ? 0 : 1; $('chords').classList.toggle('active', !!Field.chordMode); });
 $('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
 $('rec').addEventListener('click', toggleRecord);
 
