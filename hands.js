@@ -631,6 +631,7 @@ function poseHold(raw) {
   if (raw === _posePending) _poseStable++; else { _posePending = raw; _poseStable = 0; }
   if (_poseStable >= 5 && Field.gesture !== _posePending) {
     Field.gesture = _posePending;
+    if (Field.chordMode) Field.bloom = 1;            // chord mode: each new chord blooms the space (reward the change)
     const sc = MODES[Field.mode];
     const M = {
       fist: [[], 0], point: [[], 0], peace: [[7], 0], three: [[sc[2], 7], 0],
@@ -734,6 +735,43 @@ function drawGrid() {
     ctx2.fillText(NOTE_NAMES[SCALE[i] % 12], x + bw / 2, H - 28);
   }
 }
+// CHORD GLYPH — in chord mode the chord becomes a shape: a polygon whose number of
+// sides equals the number of voices. Root = a point, fifth = a line, triad = a
+// triangle, seventh = a square. It turns with your wrist (twist) and brightens as
+// you lean in (intensity). The shape IS the chord — you learn harmony by its form.
+const CHORD_QUALITY = { open: '7th', three: 'triad', peace: 'sus4', point: '5th', fist: 'root' };
+function chordVoices(F) {
+  const idx = clamp((F.pitch * SCALE.length) | 0, 0, SCALE.length - 1);
+  return diatonicChord(idx, F.gesture).length + 1;   // root + offsets = total voices
+}
+function drawChordGlyph(cx, cy, F) {
+  const n = chordVoices(F), hue = HUE[F.mode] || 215;
+  const R = Math.min(W, H) * (0.06 + 0.10 * F.intensity);
+  const rot = F.twist * TAU - Math.PI / 2;            // a vertex points up; the wrist spins it
+  ctx2.globalCompositeOperation = 'lighter';
+  const g = ctx2.createRadialGradient(cx, cy, 0, cx, cy, R * 1.7);   // a soft aura behind the glyph
+  g.addColorStop(0, `hsla(${hue},60%,68%,${0.10 + 0.26 * F.intensity})`);
+  g.addColorStop(1, `hsla(${hue},60%,60%,0)`);
+  ctx2.fillStyle = g; ctx2.beginPath(); ctx2.arc(cx, cy, R * 1.7, 0, TAU); ctx2.fill();
+
+  if (n <= 1) {                                       // root alone — a single point
+    ctx2.fillStyle = `hsla(${hue},70%,82%,${0.7 + 0.3 * F.intensity})`;
+    ctx2.beginPath(); ctx2.arc(cx, cy, 5 + 5 * F.intensity, 0, TAU); ctx2.fill();
+  } else {
+    const pts = [];
+    for (let i = 0; i < n; i++) { const a = rot + (i / n) * TAU; pts.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]); }
+    ctx2.lineWidth = 2 + 3 * F.intensity;
+    ctx2.strokeStyle = `hsla(${hue},65%,80%,${0.45 + 0.45 * F.intensity})`;
+    ctx2.shadowColor = `hsla(${hue},70%,60%,0.85)`; ctx2.shadowBlur = 18;
+    ctx2.beginPath(); ctx2.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < n; i++) ctx2.lineTo(pts[i][0], pts[i][1]);
+    if (n > 2) ctx2.closePath();                      // 2 voices stay an open line; 3+ close into a polygon
+    ctx2.stroke(); ctx2.shadowBlur = 0;
+    ctx2.fillStyle = 'rgba(236,231,218,.95)';
+    for (const [x, y] of pts) { ctx2.beginPath(); ctx2.arc(x, y, 3.2 + 2 * F.intensity, 0, TAU); ctx2.fill(); }   // a node per voice
+  }
+  ctx2.globalCompositeOperation = 'source-over';
+}
 // the temple's breath — a slow halo to breathe with; warms gold as coherence rises
 function drawBreath() {
   const cx = W / 2, cy = H / 2, base = Math.min(W, H) * 0.16;
@@ -751,6 +789,10 @@ const GESTURE_WORD = { fist: 'muted', point: 'a single voice', peace: 'a fifth',
 function statusWord() {
   if (Field.frozen) return 'held';
   if (Field.hands === 0) return Field.temple ? 'breathe' : 'waiting';
+  if (Field.chordMode) {                                     // chord mode names the chord: root + quality
+    const note = NOTE_NAMES[SCALE[clamp((Field.pitch * SCALE.length) | 0, 0, SCALE.length - 1)] % 12];
+    return note + ' ' + (CHORD_QUALITY[Field.gesture] || 'triad');
+  }
   if (Field.union > 0.7) return 'union';
   if (Field.bloom > 0.5) return 'bloom';
   const note = NOTE_NAMES[SCALE[clamp((Field.pitch * SCALE.length) | 0, 0, SCALE.length - 1)] % 12];
@@ -804,6 +846,15 @@ function render(video, results, dt) {
     sg.addColorStop(1, 'hsla(48,90%,70%,0)');
     ctx2.fillStyle = sg; ctx2.beginPath(); ctx2.arc(sx, sy, rr, 0, TAU); ctx2.fill();
     ctx2.globalCompositeOperation = 'source-over';
+  }
+
+  if (Field.chordMode) {                                            // chord mode: draw the chord as a glyph on the playing hand
+    let cx = W / 2, cy = H * 0.42;
+    if (hands.length) {                                             // the voice hand is the rightmost on screen (where pitch is played)
+      let bx = -1;
+      for (const lm of hands) { const m = metrics(lm), sx = (1 - m.px) * W; if (sx > bx) { bx = sx; cx = sx; cy = m.py * H; } }
+    }
+    drawChordGlyph(cx, cy, Field);
   }
 
   ctx2.textAlign = 'center';
