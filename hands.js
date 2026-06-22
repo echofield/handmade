@@ -77,6 +77,36 @@ const scaleNotes = (root, mode) => {                 // three octaves -> smooth,
 let SCALE = scaleNotes(Field.root, Field.mode);
 
 // =====================================================================
+// SMART MODE — an autonomous conductor. On a slow clock it walks the key
+// through a curated progression of "worlds" (root + mode), rebuilding the
+// scale so the drone bends inevitably into each new harmony. The cure for
+// monotony: the music is always going somewhere, even while your hands rest.
+// (after grammar.py's transposition_event — a modulation that feels inevitable)
+// =====================================================================
+const SmartConductor = (() => {
+  let on = false, home = 9, step = 0, nextAt = 0;
+  const WORLDS = [
+    { dr: 0,  mode: 'aeolian' },   // home — minor gravity
+    { dr: 5,  mode: 'aeolian' },   // up a fourth, still minor
+    { dr: 5,  mode: 'dorian'  },   // same root, brightened
+    { dr: 10, mode: 'ionian'  },   // a major sunrise
+    { dr: 3,  mode: 'lydian'  },   // floating, weightless
+    { dr: 7,  mode: 'aeolian' },   // the dominant pull home
+  ];
+  function enable(v) { on = v; if (on) { home = Field.root; step = 0; nextAt = 0; } }
+  function isOn() { return on; }
+  function tick(now) {                                   // now in seconds
+    if (!on || now < nextAt) return;
+    const w = WORLDS[step % WORLDS.length]; step++;
+    Field.root = ((home + w.dr) % 12 + 12) % 12;
+    Field.mode = w.mode;
+    SCALE = scaleNotes(Field.root, Field.mode);          // the drone bends into the new world
+    nextAt = now + 16 + Math.random() * 8;               // dwell 16-24s in each world
+  }
+  return { enable, isOn, tick };
+})();
+
+// =====================================================================
 // ONE-EURO FILTER — adaptive de-noiser. Steady when you hold still,
 // snappy when you move fast. This is what makes the Field feel alive
 // instead of jittery or laggy. (Casiez, Roussel & Vogel, 2012.)
@@ -755,6 +785,7 @@ function loop(now) {
     if (results) interpret(results, now / 1000);
   }
   Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
+  if (running) SmartConductor.tick(now / 1000);                       // the conductor drifts the harmony onward
   if (running) for (const k of activeEngines) ENGINES[k].update(Field);
   if (running) TDBridge.send(Field);                                 // stream the Field to TouchDesigner (localhost only)
   render(video, results, dt);
@@ -810,6 +841,7 @@ $('cam-toggle').addEventListener('click', () => { camMode = camMode === 'user' ?
 camLabel();
 $('temple').addEventListener('click', () => { Field.temple = !Field.temple; $('temple').classList.toggle('active', Field.temple); });
 $('mode').addEventListener('click', cycleMode);
+$('smart').addEventListener('click', () => { SmartConductor.enable(!SmartConductor.isOn()); $('smart').classList.toggle('active', SmartConductor.isOn()); });
 $('fs').addEventListener('click', toggleFs);
 $('freeze').addEventListener('click', () => { Field.frozen = !Field.frozen; $('freeze').classList.toggle('active', Field.frozen); });
 addEventListener('keydown', (e) => {
