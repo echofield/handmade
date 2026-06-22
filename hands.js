@@ -733,6 +733,7 @@ function detectKeys(present, t) {
 // We instantiate ARCHETYPES, never "drum/synth". Sound is one manifestation among four;
 // the others (visual in Unity, meaning, behavior) hang off the same key. Space is the interface.
 const ARCHETYPES = ['fire', 'ocean', 'saturn', 'sun', 'moon', 'tree', 'wind', 'memory'];
+const ARCH_HUE = [18, 200, 45, 50, 230, 130, 170, 280];   // shared with Unity (field-spec archetypeHue)
 const NODES = [
   { key: 'fire',   kind: 0, x: 0.30, y: 0.56, sound: 'perc',  reach: 0.20 },   // action
   { key: 'ocean',  kind: 1, x: 0.70, y: 0.56, sound: 'pad',   reach: 0.20 },   // calm
@@ -937,6 +938,36 @@ function drawChordGlyph(cx, cy, F) {
   }
   ctx2.globalCompositeOperation = 'source-over';
 }
+// THE NODES, drawn — each archetype as a glowing glyph at its place in the room.
+// fire = a triangle, saturn = a ringed planet, the rest = a soft ring; brighten on reach.
+function drawNodes() {
+  for (let i = 0; i < NODES.length; i++) {
+    const n = NODES[i], fx = _nodeFx[i], x = n.x * W, y = n.y * H;
+    const hue = ARCH_HUE[n.kind] != null ? ARCH_HUE[n.kind] : 200;
+    const r = Math.min(W, H) * (0.07 + 0.03 * fx.focus + 0.05 * fx.level);
+    ctx2.globalCompositeOperation = 'lighter';
+    const g = ctx2.createRadialGradient(x, y, 0, x, y, r * 1.9);
+    g.addColorStop(0, `hsla(${hue},60%,66%,${0.10 + 0.30 * fx.focus + 0.30 * fx.level})`);
+    g.addColorStop(1, `hsla(${hue},60%,60%,0)`);
+    ctx2.fillStyle = g; ctx2.beginPath(); ctx2.arc(x, y, r * 1.9, 0, TAU); ctx2.fill();
+    ctx2.strokeStyle = `hsla(${hue},65%,80%,${0.45 + 0.45 * fx.focus})`;
+    ctx2.lineWidth = 2 + 3 * fx.focus;
+    const sides = n.kind === 0 ? 3 : 36;                       // fire = triangle, others = ring
+    ctx2.beginPath();
+    for (let k = 0; k <= sides; k++) { const a = -Math.PI / 2 + k / sides * TAU, xx = x + Math.cos(a) * r, yy = y + Math.sin(a) * r; k ? ctx2.lineTo(xx, yy) : ctx2.moveTo(xx, yy); }
+    ctx2.stroke();
+    if (n.kind === 2) {                                        // saturn's flattened halo
+      ctx2.beginPath();
+      for (let k = 0; k <= 44; k++) { const a = k / 44 * TAU, xx = x + Math.cos(a) * r * 1.9, yy = y + Math.sin(a) * r * 0.5; k ? ctx2.lineTo(xx, yy) : ctx2.moveTo(xx, yy); }
+      ctx2.stroke();
+    }
+    ctx2.globalCompositeOperation = 'source-over';
+    ctx2.fillStyle = `hsla(${hue},40%,86%,${0.45 + 0.45 * fx.focus})`;
+    ctx2.font = '11px Georgia'; ctx2.textAlign = 'center'; ctx2.letterSpacing = '2px';
+    ctx2.fillText(n.key.toUpperCase(), x, y + r + 18);
+    ctx2.letterSpacing = '0px';
+  }
+}
 // the temple's breath — a slow halo to breathe with; warms gold as coherence rises
 function drawBreath() {
   const cx = W / 2, cy = H / 2, base = Math.min(W, H) * 0.16;
@@ -972,6 +1003,7 @@ function render(video, results, dt) {
   ctx2.fillStyle = 'rgba(6,7,10,0.5)'; ctx2.fillRect(0, 0, W, H);   // veil
   drawBreath();
   if (Field.melody || Field.chordMode) drawGrid();                  // melody/chord mode: reveal the in-key zones to aim at
+  if (Field.objectsMode) drawNodes();                               // node mode: draw the archetypal objects in the room
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
