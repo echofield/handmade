@@ -20,6 +20,7 @@ namespace Astrolab
         Camera _cam;
         LineRenderer[] _body = new LineRenderer[Slots];
         LineRenderer[] _halo = new LineRenderer[Slots];   // saturn's ring
+        LineRenderer _obj;                                // the caught real object's box
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Bootstrap()
@@ -32,6 +33,7 @@ namespace Astrolab
         {
             _cam = Camera.main;
             for (int i = 0; i < Slots; i++) { _body[i] = MakeLR("node-" + i); _halo[i] = MakeLR("halo-" + i); }
+            _obj = MakeLR("caught-object"); _obj.loop = true;
         }
 
         LineRenderer MakeLR(string name)
@@ -64,6 +66,20 @@ namespace Astrolab
                 if (kind == 2) DrawPoly(_halo[i], c, r * 1.9f, r * 0.5f, 44, col, 0.03f);   // saturn's flattened halo
                 else _halo[i].positionCount = 0;
             }
+
+            // the caught real object — a glowing square box that brightens when sounding
+            if (f.CatchMode && f.objPresent != 0)
+            {
+                Vector3 oc = _cam.ViewportToWorldPoint(new Vector3(f.objX, 1f - f.objY, Depth));
+                float hw = f.objSize * 4f;                          // viewport width -> world half-extent (approx)
+                Color oct = Color.HSVToRGB(170f / 360f, 0.5f, 0.55f + 0.45f * f.objFocus);
+                _obj.positionCount = 4; _obj.widthMultiplier = 0.04f + 0.04f * f.objFocus; _obj.startColor = _obj.endColor = oct;
+                _obj.SetPosition(0, new Vector3(oc.x - hw, oc.y - hw, oc.z));
+                _obj.SetPosition(1, new Vector3(oc.x + hw, oc.y - hw, oc.z));
+                _obj.SetPosition(2, new Vector3(oc.x + hw, oc.y + hw, oc.z));
+                _obj.SetPosition(3, new Vector3(oc.x - hw, oc.y + hw, oc.z));
+            }
+            else _obj.positionCount = 0;
         }
 
         static void GetSlot(Field f, int i, out float x, out float y, out int kind, out int focus, out float lvl)

@@ -19,7 +19,7 @@
 
   No build step. Secure context (https / localhost) required for camera.
 */
-import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { HandLandmarker, ObjectDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
 const A4 = 432, TAU = Math.PI * 2;
 const midiToFreq = (m) => A4 * Math.pow(2, (m - 69) / 12);
@@ -63,6 +63,8 @@ const Field = {
   h0x:0.5, h0y:0.5, h1x:0.5, h1y:0.5,   // two hand anchors in screen space (mirrored to match the view) -> pin objects
   span:0.0,        // distance between the two hands (0..1) -> scale an object held between them
   objectsMode:0,   // the room is the instrument: archetypal Nodes you reach into to play
+  catchMode:0,     // catch a REAL object (webcam object detection) -> it becomes an instrument
+  objPresent:0, objX:0.5, objY:0.5, objSize:0.2, objFocus:0,   // the caught real object's anchor + state
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -795,6 +797,34 @@ function writeNodeField() {
 }
 writeNodeField();
 
+// CATCH — a REAL object becomes a Node. MediaPipe's Object Detector finds common
+// things (cup, bottle, book, phone…); we ignore 'person' so it locks onto what you
+// hold. Reach your hand onto the object and it sings — the world itself is the rack.
+let _caught = null, detector = null, detections = [], _lastDetT = 0;   // caught object + the object-detector state
+function updateCatch(present) {
+  if (!detections.length || !video.videoWidth) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
+  let best = null;
+  for (const d of detections) {
+    const c = d.categories && d.categories[0]; if (!c || c.categoryName === 'person') continue;
+    if (!best || c.score > best.categories[0].score) best = d;
+  }
+  if (!best) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
+  const bb = best.boundingBox, vw = video.videoWidth, vh = video.videoHeight;
+  const cx = 1 - (bb.originX + bb.width / 2) / vw;          // mirrored to match the view
+  const cy = (bb.originY + bb.height / 2) / vh;
+  _caught = { label: best.categories[0].categoryName || 'object', cx, cy, w: bb.width / vw, h: bb.height / vh };
+  Field.objPresent = 1; Field.objX = cx; Field.objY = cy; Field.objSize = _caught.w;
+
+  let play = false, lvl = 0;
+  for (let hi = 0; hi < present.length && hi < 2; hi++) {
+    const m = present[hi].m, d = Math.hypot((1 - m.px) - cx, m.py - cy);
+    if (d < Math.max(0.13, _caught.w * 0.7)) { play = true; lvl = Math.max(lvl, clamp(1 - d / 0.22, 0.2, 1)); }
+  }
+  const idx = clamp((cx * SCALE.length) | 0, 0, SCALE.length - 1);
+  SoftSynth.grabSynth(play, SCALE[idx] + (Field.register | 0), clamp(1 - cy, 0, 1), lvl);   // the object sings; its position = pitch
+  Field.objFocus = play ? 1 : 0;
+}
+
 function interpret(results, t) {
   const hands = (results && results.landmarks) || [];
   Field.hands = hands.length;
@@ -806,7 +836,7 @@ function interpret(results, t) {
     Field.grasp = lerp(Field.grasp, 0, 0.08);
     Field.pinch = lerp(Field.pinch, 0, 0.1);
     Field.calm = lerp(Field.calm, 0.85, 0.008);                   // rest -> coherence rises
-    if (Field.objectsMode) { SoftSynth.grabSynth(false); SoftSynth.nodeDrone(false); }   // hands gone -> node voices release
+    if (Field.objectsMode || Field.catchMode) { SoftSynth.grabSynth(false); SoftSynth.nodeDrone(false); }   // hands gone -> node voices release
     poseHold('open');
     return;                                   // pitch & co. hold where they were
   }
@@ -869,6 +899,7 @@ function interpret(results, t) {
   }
 
   if (Field.objectsMode) updateNodes(present, t); else _lastNodeT = t;   // the room is the instrument
+  if (Field.catchMode) updateCatch(present);                             // a real object becomes the instrument
 }
 
 // =====================================================================
@@ -968,6 +999,25 @@ function drawNodes() {
     ctx2.letterSpacing = '0px';
   }
 }
+// THE CAUGHT OBJECT — a reticle + label around the real thing you're holding;
+// it glows when a hand is on it (the object is sounding).
+function drawCaught() {
+  if (!_caught) return;
+  const x = _caught.cx * W, y = _caught.cy * H, w = _caught.w * W, h = _caught.h * H, hue = 170;
+  const lit = Field.objFocus ? 1 : 0;
+  ctx2.globalCompositeOperation = 'lighter';
+  const g = ctx2.createRadialGradient(x, y, 0, x, y, Math.max(w, h) * 0.8);
+  g.addColorStop(0, `hsla(${hue},60%,65%,${0.06 + 0.28 * lit})`);
+  g.addColorStop(1, `hsla(${hue},60%,60%,0)`);
+  ctx2.fillStyle = g; ctx2.beginPath(); ctx2.arc(x, y, Math.max(w, h) * 0.8, 0, TAU); ctx2.fill();
+  ctx2.globalCompositeOperation = 'source-over';
+  ctx2.strokeStyle = `hsla(${hue},70%,82%,${0.5 + 0.4 * lit})`; ctx2.lineWidth = 2 + 2 * lit;
+  ctx2.strokeRect(x - w / 2, y - h / 2, w, h);
+  ctx2.fillStyle = `hsla(${hue},45%,88%,${0.6 + 0.4 * lit})`;
+  ctx2.font = '12px Georgia'; ctx2.textAlign = 'center'; ctx2.letterSpacing = '2px';
+  ctx2.fillText(_caught.label.toUpperCase(), x, y - h / 2 - 8);
+  ctx2.letterSpacing = '0px';
+}
 // the temple's breath — a slow halo to breathe with; warms gold as coherence rises
 function drawBreath() {
   const cx = W / 2, cy = H / 2, base = Math.min(W, H) * 0.16;
@@ -1004,6 +1054,7 @@ function render(video, results, dt) {
   drawBreath();
   if (Field.melody || Field.chordMode) drawGrid();                  // melody/chord mode: reveal the in-key zones to aim at
   if (Field.objectsMode) drawNodes();                               // node mode: draw the archetypal objects in the room
+  if (Field.catchMode) drawCaught();                                // catch mode: draw the real object that's become an instrument
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
@@ -1069,7 +1120,7 @@ function render(video, results, dt) {
 // bridge change nothing about the instrument.
 // Field contract (see field-spec.json) — stable encodings so the whole Field
 // travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
-const SCHEMA_V = 4;
+const SCHEMA_V = 5;
 const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
@@ -1108,6 +1159,8 @@ const TDBridge = (() => {
         n1x: F.n1x, n1y: F.n1y, n1kind: F.n1kind, n1focus: F.n1focus, n1lvl: F.n1lvl,
         n2x: F.n2x, n2y: F.n2y, n2kind: F.n2kind, n2focus: F.n2focus, n2lvl: F.n2lvl,
         n3x: F.n3x, n3y: F.n3y, n3kind: F.n3kind, n3focus: F.n3focus, n3lvl: F.n3lvl,
+        // a caught real object (webcam object detection)
+        catchMode: F.catchMode, objPresent: F.objPresent, objX: F.objX, objY: F.objY, objSize: F.objSize, objFocus: F.objFocus,
         temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}
@@ -1125,6 +1178,10 @@ function loop(now) {
     try { results = landmarker.detectForVideo(video, now); } catch (e) { /* timestamp race — skip */ }
     if (results) interpret(results, now / 1000);
   }
+  if (running && detector && Field.catchMode && video.readyState >= 2 && now - _lastDetT > 120) {   // object detection, throttled (~8fps) to keep hands smooth
+    _lastDetT = now;
+    try { const r = detector.detectForVideo(video, now); detections = (r && r.detections) || []; } catch (e) { /* skip */ }
+  }
   Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
   if (running) SmartConductor.tick(now / 1000);                       // the conductor drifts the harmony onward
   if (running) for (const k of activeEngines) ENGINES[k].update(Field);
@@ -1141,6 +1198,18 @@ async function makeLandmarker() {
     runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: 0.6, minTrackingConfidence: 0.5,
   });
   try { return await build("GPU"); } catch (e) { return await build("CPU"); }
+}
+
+// loaded lazily the first time Catch is enabled (so it costs nothing otherwise)
+async function makeDetector() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const build = (delegate) => ObjectDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite", delegate },
+      scoreThreshold: 0.4, maxResults: 5, runningMode: "VIDEO",
+    });
+    try { detector = await build("GPU"); } catch (e) { detector = await build("CPU"); }
+  } catch (e) { console.warn('object detector unavailable', e); }
 }
 
 const $ = (id) => document.getElementById(id);
@@ -1187,6 +1256,10 @@ $('pulse').addEventListener('click', () => { const on = !SoftSynth.pulseOn; Soft
 $('chords').addEventListener('click', () => { Field.chordMode = Field.chordMode ? 0 : 1; $('chords').classList.toggle('active', !!Field.chordMode); });
 $('keys').addEventListener('click', () => { Field.keysMode = Field.keysMode ? 0 : 1; $('keys').classList.toggle('active', !!Field.keysMode); });
 $('objects').addEventListener('click', () => { Field.objectsMode = Field.objectsMode ? 0 : 1; $('objects').classList.toggle('active', !!Field.objectsMode); });
+$('catch').addEventListener('click', async () => {
+  Field.catchMode = Field.catchMode ? 0 : 1; $('catch').classList.toggle('active', !!Field.catchMode);
+  if (Field.catchMode && !detector) { $('catch').textContent = 'loading…'; await makeDetector(); $('catch').textContent = 'Catch'; }   // lazy-load the model on first use
+});
 $('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
 $('rec').addEventListener('click', toggleRecord);
 

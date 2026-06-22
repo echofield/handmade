@@ -1,6 +1,6 @@
 {
   "$comment": "ASTROLAB FIELD — the engine-agnostic control surface. hands (or any future input) WRITE the Field; sound, visuals, worlds READ it. This file is the single source of truth shared by the web instrument (hands.js), the OSC relay (td-bridge.js), and any reader (Unity/OscJack, TouchDesigner). Bump `version` on any breaking change.",
-  "version": 4,
+  "version": 5,
   "transport": {
     "websocket": { "host": "127.0.0.1", "port": 8765, "note": "browser -> relay (the browser cannot speak UDP/OSC)" },
     "osc": {
@@ -73,6 +73,13 @@
     "n3kind": { "type": "int", "range": [-1, 7], "desc": "node 3 archetype index" },
     "n3focus": { "type": "bool01", "desc": "node 3 focus" },
     "n3lvl": { "type": "float", "range": [0, 1], "desc": "node 3 activity" },
+
+    "catchMode":  { "type": "bool01", "desc": "catch mode: a real object (webcam object detection) becomes an instrument" },
+    "objPresent": { "type": "bool01", "desc": "a real object is currently caught" },
+    "objX":       { "type": "float", "range": [0, 1], "desc": "caught object center X (screen space, mirrored)" },
+    "objY":       { "type": "float", "range": [0, 1], "desc": "caught object center Y (screen space)" },
+    "objSize":    { "type": "float", "range": [0, 1], "desc": "caught object width (fraction of frame)" },
+    "objFocus":   { "type": "bool01", "desc": "a hand is on the caught object (it is sounding)" },
     "temple":     { "type": "bool01", "desc": "healing mode (deeper breath + resolution, dimmer, warmer)" },
     "frozen":     { "type": "bool01", "desc": "Hold engaged (the pad is held instead of gliding)" },
     "hands":      { "type": "int", "range": [0, 2], "desc": "number of hands currently tracked" }

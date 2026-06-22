@@ -20,7 +20,7 @@ namespace Astrolab
     [Serializable]
     public class Field
     {
-        public const int Schema = 4;
+        public const int Schema = 5;
 
         // schema version of the last frame received (should equal Schema)
         public int v;
@@ -64,6 +64,11 @@ namespace Astrolab
         public static readonly float[] ArchetypeHue = { 18f, 200f, 45f, 50f, 230f, 130f, 170f, 280f };
         public bool ObjectsMode => objectsMode != 0;
         public string ArchetypeName(int kind) => (kind >= 0 && kind < Archetypes.Length) ? Archetypes[kind] : "";
+
+        // --- a caught real object (webcam object detection) ---
+        public int catchMode, objPresent, objFocus;
+        public float objX = 0.5f, objY = 0.5f, objSize = 0.2f;
+        public bool CatchMode => catchMode != 0;
 
         // --- decode tables (match field-spec.json) ---
         public static readonly string[] Modes     = { "aeolian", "dorian", "lydian", "phrygian", "ionian" };
@@ -158,6 +163,13 @@ namespace Astrolab
                 case "n3kind": n3kind = (int)value; break;
                 case "n3focus": n3focus = (int)value; break;
                 case "n3lvl": n3lvl = value; break;
+
+                case "catchMode": catchMode = (int)value; break;
+                case "objPresent": objPresent = (int)value; break;
+                case "objX": objX = value; break;
+                case "objY": objY = value; break;
+                case "objSize": objSize = value; break;
+                case "objFocus": objFocus = (int)value; break;
                 case "temple": temple = (int)value; break;
                 case "frozen": frozen = (int)value; break;
                 case "hands": hands = (int)value; break;
