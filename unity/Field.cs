@@ -20,7 +20,7 @@ namespace Astrolab
     [Serializable]
     public class Field
     {
-        public const int Schema = 2;
+        public const int Schema = 3;
 
         // schema version of the last frame received (should equal Schema)
         public int v;
@@ -48,6 +48,10 @@ namespace Astrolab
         public int keysMode;
         public float strike;    // transient: a finger just struck a note
         public float strikeX;   // 0..1 horizontal position of that strike
+
+        // --- hand anchors (normalized screen space, 0=top/left .. 1=bottom/right) ---
+        public float h0x = 0.5f, h0y = 0.5f, h1x = 0.5f, h1y = 0.5f;
+        public float span;      // distance between the two hands (0 when <2 hands)
 
         // --- decode tables (match field-spec.json) ---
         public static readonly string[] Modes     = { "aeolian", "dorian", "lydian", "phrygian", "ionian" };
@@ -114,6 +118,11 @@ namespace Astrolab
                 case "keysMode": keysMode = (int)value; break;
                 case "strike": strike = value; break;
                 case "strikeX": strikeX = value; break;
+                case "h0x": h0x = value; break;
+                case "h0y": h0y = value; break;
+                case "h1x": h1x = value; break;
+                case "h1y": h1y = value; break;
+                case "span": span = value; break;
                 case "temple": temple = (int)value; break;
                 case "frozen": frozen = (int)value; break;
                 case "hands": hands = (int)value; break;

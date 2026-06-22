@@ -60,6 +60,8 @@ const Field = {
   keysMode:0,      // air-piano: each fingertip strikes a note on a downward jab
   strike:0.0,      // transient: a finger struck a note (decays) -> visual flash
   strikeX:0.5,     // horizontal position (0..1) of the last strike -> where to flash
+  h0x:0.5, h0y:0.5, h1x:0.5, h1y:0.5,   // two hand anchors in screen space (mirrored to match the view) -> pin objects
+  span:0.0,        // distance between the two hands (0..1) -> scale an object held between them
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -735,6 +737,15 @@ function interpret(results, t) {
   poseHold(classifyPose(fingerExt(chord.lm, chord.m)));           // discrete shape from the chord hand
   Field.melody = (hands.length >= 2 && Field.gesture === 'fist') ? 1 : 0;   // left fist anchors -> the right hand plays melody
   if (Field.keysMode) detectKeys(present, t); else _lastKeyT = t;          // air-piano runs on raw fingertip velocity
+
+  // hand anchors (normalized screen space, mirrored to match the view) so Unity can pin objects to the hands
+  if (present.length >= 2) {
+    Field.h0x = 1 - present[0].m.px; Field.h0y = present[0].m.py;
+    Field.h1x = 1 - present[1].m.px; Field.h1y = present[1].m.py;
+    Field.span = clamp(Math.hypot(present[0].m.px - present[1].m.px, present[0].m.py - present[1].m.py), 0, 1);
+  } else {
+    Field.h0x = Field.h1x = 1 - voice.m.px; Field.h0y = Field.h1y = voice.m.py; Field.span = 0;
+  }
 }
 
 // =====================================================================
@@ -904,7 +915,7 @@ function render(video, results, dt) {
 // bridge change nothing about the instrument.
 // Field contract (see field-spec.json) — stable encodings so the whole Field
 // travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
-const SCHEMA_V = 2;
+const SCHEMA_V = 3;
 const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
@@ -935,6 +946,8 @@ const TDBridge = (() => {
         // discrete states (0/1) + the air-piano event
         melody: F.melody, chordMode: F.chordMode, keysMode: F.keysMode,
         strike: F.strike, strikeX: F.strikeX,
+        // hand anchors -> pin objects to / between the hands
+        h0x: F.h0x, h0y: F.h0y, h1x: F.h1x, h1y: F.h1y, span: F.span,
         temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}

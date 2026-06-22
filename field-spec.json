@@ -1,6 +1,6 @@
 {
   "$comment": "ASTROLAB FIELD — the engine-agnostic control surface. hands (or any future input) WRITE the Field; sound, visuals, worlds READ it. This file is the single source of truth shared by the web instrument (hands.js), the OSC relay (td-bridge.js), and any reader (Unity/OscJack, TouchDesigner). Bump `version` on any breaking change.",
-  "version": 2,
+  "version": 3,
   "transport": {
     "websocket": { "host": "127.0.0.1", "port": 8765, "note": "browser -> relay (the browser cannot speak UDP/OSC)" },
     "osc": {
@@ -45,6 +45,11 @@
     "keysMode":   { "type": "bool01", "desc": "air-piano active (each fingertip strikes a note on a downward jab)" },
     "strike":     { "type": "float", "range": [0, 1], "desc": "transient: a fingertip just struck a note (decays each frame) -> visual flash" },
     "strikeX":    { "type": "float", "range": [0, 1], "desc": "horizontal position of the last strike (0=left .. 1=right) -> where to flash" },
+    "h0x":        { "type": "float", "range": [0, 1], "desc": "hand 0 anchor X in screen space (mirrored to match the view); 1 hand -> both anchors equal" },
+    "h0y":        { "type": "float", "range": [0, 1], "desc": "hand 0 anchor Y in screen space (0=top .. 1=bottom)" },
+    "h1x":        { "type": "float", "range": [0, 1], "desc": "hand 1 anchor X in screen space" },
+    "h1y":        { "type": "float", "range": [0, 1], "desc": "hand 1 anchor Y in screen space" },
+    "span":       { "type": "float", "range": [0, 1], "desc": "distance between the two hands -> scale an object held between them (0 when <2 hands)" },
     "temple":     { "type": "bool01", "desc": "healing mode (deeper breath + resolution, dimmer, warmer)" },
     "frozen":     { "type": "bool01", "desc": "Hold engaged (the pad is held instead of gliding)" },
     "hands":      { "type": "int", "range": [0, 2], "desc": "number of hands currently tracked" }

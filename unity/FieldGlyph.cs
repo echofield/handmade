@@ -28,6 +28,7 @@ namespace Astrolab
         Transform _t;
         Camera _cam;
         float _spin;
+        const float Depth = 10f;   // distance in front of the camera the glyph lives at
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Bootstrap()
@@ -94,12 +95,20 @@ namespace Astrolab
             }
 
             int n = Mathf.Clamp(f.chordVoices <= 0 ? 1 : f.chordVoices, 1, 4);
-            float R = 0.6f + 1.7f * f.intensity + 0.6f * f.bloom;
+            // held between two hands -> scale by their distance; one hand -> scale by intensity
+            float R = (f.hands >= 2)
+                ? Mathf.Clamp(f.span * 9f, 0.4f, 4f) + 0.5f * f.bloom
+                : 0.6f + 1.7f * f.intensity + 0.6f * f.bloom;
 
-            // glide to the position the hand names
-            Vector3 home = new Vector3(Mathf.Lerp(-3.5f, 3.5f, f.pitch),
-                                       Mathf.Lerp(-1.5f, 2.5f, f.brightness), 0f);
-            _t.localPosition = Vector3.Lerp(_t.localPosition, home, 0.15f);
+            // pin to the hands: place the glyph at the midpoint of the two hand anchors,
+            // mapped through the camera so it sits exactly where your hands are on screen
+            if (f.hands >= 1 && _cam != null)
+            {
+                Vector3 v0 = new Vector3(f.h0x, 1f - f.h0y, Depth);   // screen-space y is top-down; viewport is bottom-up
+                Vector3 v1 = new Vector3(f.h1x, 1f - f.h1y, Depth);
+                Vector3 world = _cam.ViewportToWorldPoint((v0 + v1) * 0.5f);
+                _t.position = Vector3.Lerp(_t.position, world, 0.3f);
+            }
 
             // spin: a slow drift plus the wrist
             _spin += (12f + (f.twist - 0.5f) * 200f) * Time.deltaTime;
