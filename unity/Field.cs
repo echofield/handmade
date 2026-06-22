@@ -20,7 +20,7 @@ namespace Astrolab
     [Serializable]
     public class Field
     {
-        public const int Schema = 1;
+        public const int Schema = 2;
 
         // schema version of the last frame received (should equal Schema)
         public int v;
@@ -43,6 +43,11 @@ namespace Astrolab
 
         // --- discrete states (0/1) ---
         public int melody, chordMode, temple, frozen, hands;
+
+        // --- air-piano (Keys mode) ---
+        public int keysMode;
+        public float strike;    // transient: a finger just struck a note
+        public float strikeX;   // 0..1 horizontal position of that strike
 
         // --- decode tables (match field-spec.json) ---
         public static readonly string[] Modes     = { "aeolian", "dorian", "lydian", "phrygian", "ionian" };
@@ -106,6 +111,9 @@ namespace Astrolab
 
                 case "melody": melody = (int)value; break;
                 case "chordMode": chordMode = (int)value; break;
+                case "keysMode": keysMode = (int)value; break;
+                case "strike": strike = value; break;
+                case "strikeX": strikeX = value; break;
                 case "temple": temple = (int)value; break;
                 case "frozen": frozen = (int)value; break;
                 case "hands": hands = (int)value; break;

@@ -57,6 +57,9 @@ const Field = {
   gesture:'open',  // the recognized hand-pose intent (debounced)
   melody:0,        // left fist anchors a pedal -> the right hand strikes notes in-key
   chordMode:0,     // hand position plays a full diatonic chord; left pose = the quality
+  keysMode:0,      // air-piano: each fingertip strikes a note on a downward jab
+  strike:0.0,      // transient: a finger struck a note (decays) -> visual flash
+  strikeX:0.5,     // horizontal position (0..1) of the last strike -> where to flash
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -367,6 +370,8 @@ const SoftSynth = (() => {
   function setBPM(b) { pulseBPM = clamp(b | 0, 30, 140); }
   function recStream() { return recDest ? recDest.stream : null; }
 
+  function strike(midi) { pluckLead(midi); }     // air-piano: a fingertip strikes a plucked note
+
   function pluckLead(midi) {
     if (!osc.lead || !osc.lead.length) return;
     const v = osc.lead[leadPtr % osc.lead.length]; leadPtr++;
@@ -397,7 +402,7 @@ const SoftSynth = (() => {
     master.gain.setTargetAtTime(0, c.currentTime, 0.15);
     setTimeout(() => c.close(), 500); ctx = null;
   }
-  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
+  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, strike, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
 })();
 
 // =====================================================================
@@ -642,10 +647,36 @@ function poseHold(raw) {
   }
 }
 
+// AIR PIANO — each fingertip is a striker. A quick downward jab plays a pluck at
+// the scale-note under that fingertip; polyphonic across both hands. Velocity +
+// per-finger debounce so only a deliberate tap fires, never a slow drift.
+const KEY_TIPS = [8, 12, 16, 20];                 // index · middle · ring · pinky
+let _keyState = [], _lastKeyT = 0;
+function detectKeys(present, t) {
+  const dt = Math.max(1e-3, t - _lastKeyT); _lastKeyT = t;
+  for (let hi = 0; hi < present.length && hi < 2; hi++) {
+    if (!_keyState[hi]) _keyState[hi] = KEY_TIPS.map(() => ({ y: null, last: 0 }));
+    const lm = present[hi].lm;
+    for (let fi = 0; fi < KEY_TIPS.length; fi++) {
+      const tip = KEY_TIPS[fi], ty = lm[tip].y, st = _keyState[hi][fi];
+      if (st.y !== null) {
+        const vy = (ty - st.y) / dt;                                   // +y points down the screen
+        if (vy > 2.2 && t - st.last > 0.16) {                          // a downward jab = a key strike
+          st.last = t;
+          const tx = lm[tip].x, idx = clamp(((1 - tx) * SCALE.length) | 0, 0, SCALE.length - 1);
+          SoftSynth.strike(SCALE[idx] + (Field.register | 0));         // sound the note (web synth)
+          Field.strike = 1; Field.strikeX = 1 - tx;                    // flag the event for the bridge / visuals
+        }
+      }
+      st.y = ty;
+    }
+  }
+}
+
 function interpret(results, t) {
   const hands = (results && results.landmarks) || [];
   Field.hands = hands.length;
-  Field.accent *= 0.88; Field.bloom *= 0.92; Field.body *= 0.82;  // transients fade every frame
+  Field.accent *= 0.88; Field.bloom *= 0.92; Field.body *= 0.82; Field.strike *= 0.80;  // transients fade every frame
   if (hands.length === 0) {
     Field.intensity = lerp(Field.intensity, 0, 0.05);
     Field.motion = lerp(Field.motion, 0, 0.06);
@@ -703,6 +734,7 @@ function interpret(results, t) {
 
   poseHold(classifyPose(fingerExt(chord.lm, chord.m)));           // discrete shape from the chord hand
   Field.melody = (hands.length >= 2 && Field.gesture === 'fist') ? 1 : 0;   // left fist anchors -> the right hand plays melody
+  if (Field.keysMode) detectKeys(present, t); else _lastKeyT = t;          // air-piano runs on raw fingertip velocity
 }
 
 // =====================================================================
@@ -872,7 +904,7 @@ function render(video, results, dt) {
 // bridge change nothing about the instrument.
 // Field contract (see field-spec.json) — stable encodings so the whole Field
 // travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
-const SCHEMA_V = 1;
+const SCHEMA_V = 2;
 const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
@@ -900,8 +932,9 @@ const TDBridge = (() => {
         // harmony / key — numeric encodings so the contract stays float-only over OSC
         root: F.root, modeIdx: MODE_NAMES.indexOf(F.mode),
         gestureIdx: POSE_ORDER.indexOf(F.gesture), chordVoices: chordVoices(F),
-        // discrete states (0/1)
-        melody: F.melody, chordMode: F.chordMode,
+        // discrete states (0/1) + the air-piano event
+        melody: F.melody, chordMode: F.chordMode, keysMode: F.keysMode,
+        strike: F.strike, strikeX: F.strikeX,
         temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}
@@ -979,6 +1012,7 @@ $('mode').addEventListener('click', cycleMode);
 $('smart').addEventListener('click', () => { SmartConductor.enable(!SmartConductor.isOn()); $('smart').classList.toggle('active', SmartConductor.isOn()); });
 $('pulse').addEventListener('click', () => { const on = !SoftSynth.pulseOn; SoftSynth.setPulse(on); $('pulse').classList.toggle('active', on); });
 $('chords').addEventListener('click', () => { Field.chordMode = Field.chordMode ? 0 : 1; $('chords').classList.toggle('active', !!Field.chordMode); });
+$('keys').addEventListener('click', () => { Field.keysMode = Field.keysMode ? 0 : 1; $('keys').classList.toggle('active', !!Field.keysMode); });
 $('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
 $('rec').addEventListener('click', toggleRecord);
 
