@@ -21,6 +21,8 @@ namespace Astrolab
         LineRenderer[] _body = new LineRenderer[Slots];
         LineRenderer[] _halo = new LineRenderer[Slots];   // saturn's ring
         LineRenderer _obj;                                // the caught real object's box
+        LineRenderer[] _loopRing = new LineRenderer[4];   // persistent loop rings
+        LineRenderer[] _loopComet = new LineRenderer[4];  // each loop's orbital playhead
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void Bootstrap()
@@ -34,6 +36,7 @@ namespace Astrolab
             _cam = Camera.main;
             for (int i = 0; i < Slots; i++) { _body[i] = MakeLR("node-" + i); _halo[i] = MakeLR("halo-" + i); }
             _obj = MakeLR("caught-object"); _obj.loop = true;
+            for (int i = 0; i < 4; i++) { _loopRing[i] = MakeLR("loop-ring-" + i); _loopComet[i] = MakeLR("loop-comet-" + i); }
         }
 
         LineRenderer MakeLR(string name)
@@ -80,6 +83,33 @@ namespace Astrolab
                 _obj.SetPosition(3, new Vector3(oc.x - hw, oc.y + hw, oc.z));
             }
             else _obj.positionCount = 0;
+
+            // the spatial loops — persistent rings, each with an orbital playhead comet
+            for (int i = 0; i < 4; i++)
+            {
+                GetLoop(f, i, out float lx, out float ly, out float level, out int lkind, out float prog);
+                if (level < 0f) { _loopRing[i].positionCount = 0; _loopComet[i].positionCount = 0; continue; }
+                Vector3 lc = _cam.ViewportToWorldPoint(new Vector3(lx, 1f - ly, Depth));
+                float lhue = (lkind >= 0 && lkind < Field.ArchetypeHue.Length ? Field.ArchetypeHue[lkind] : 280f) / 360f;
+                float lr = 0.55f + 0.2f * level;
+                Color lcol = Color.HSVToRGB(lhue, 0.55f, 0.5f + 0.4f * level);
+                DrawPoly(_loopRing[i], lc, lr, lr, 64, lcol, 0.03f);                          // a smooth high-res ring
+                float th = -Mathf.PI / 2f + prog * Mathf.PI * 2f;                              // playhead angle (top = downbeat)
+                Vector3 comet = new Vector3(lc.x + Mathf.Cos(th) * lr, lc.y + Mathf.Sin(th) * lr, lc.z);
+                Color ccol = Color.HSVToRGB(lhue, 0.5f, 1f);
+                DrawPoly(_loopComet[i], comet, 0.07f + 0.10f * level, 0.07f + 0.10f * level, 12, ccol, 0.05f + 0.06f * level);
+            }
+        }
+
+        static void GetLoop(Field f, int i, out float x, out float y, out float level, out int kind, out float prog)
+        {
+            switch (i)
+            {
+                case 0: x = f.loop0x; y = f.loop0y; level = f.loop0level; kind = f.loop0kind; prog = f.loop0prog; break;
+                case 1: x = f.loop1x; y = f.loop1y; level = f.loop1level; kind = f.loop1kind; prog = f.loop1prog; break;
+                case 2: x = f.loop2x; y = f.loop2y; level = f.loop2level; kind = f.loop2kind; prog = f.loop2prog; break;
+                default: x = f.loop3x; y = f.loop3y; level = f.loop3level; kind = f.loop3kind; prog = f.loop3prog; break;
+            }
         }
 
         static void GetSlot(Field f, int i, out float x, out float y, out int kind, out int focus, out float lvl)

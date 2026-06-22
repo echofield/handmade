@@ -1,6 +1,6 @@
 {
   "$comment": "ASTROLAB FIELD — the engine-agnostic control surface. hands (or any future input) WRITE the Field; sound, visuals, worlds READ it. This file is the single source of truth shared by the web instrument (hands.js), the OSC relay (td-bridge.js), and any reader (Unity/OscJack, TouchDesigner). Bump `version` on any breaking change.",
-  "version": 5,
+  "version": 6,
   "transport": {
     "websocket": { "host": "127.0.0.1", "port": 8765, "note": "browser -> relay (the browser cannot speak UDP/OSC)" },
     "osc": {
@@ -80,6 +80,29 @@
     "objY":       { "type": "float", "range": [0, 1], "desc": "caught object center Y (screen space)" },
     "objSize":    { "type": "float", "range": [0, 1], "desc": "caught object width (fraction of frame)" },
     "objFocus":   { "type": "bool01", "desc": "a hand is on the caught object (it is sounding)" },
+
+    "loopCount":  { "type": "int", "range": [0, 4], "desc": "how many spatial loops are live" },
+    "$loopNote":  "FLAT PROXY: the browser keeps the tape (recorded events); Unity only ever receives the playhead per loop. level = -1 means an empty/inactive slot.",
+    "loop0x": { "type": "float", "range": [0, 1], "desc": "loop 0 X (screen space, gently orbiting)" },
+    "loop0y": { "type": "float", "range": [0, 1], "desc": "loop 0 Y" },
+    "loop0level": { "type": "float", "range": [-1, 1], "desc": "loop 0 instantaneous level (-1 = empty slot)" },
+    "loop0kind": { "type": "int", "range": [-1, 7], "desc": "loop 0 archetype (7 = memory)" },
+    "loop0prog": { "type": "float", "range": [0, 1], "desc": "loop 0 playhead 0..1 -> the orbital comet" },
+    "loop1x": { "type": "float", "range": [0, 1], "desc": "loop 1 X" },
+    "loop1y": { "type": "float", "range": [0, 1], "desc": "loop 1 Y" },
+    "loop1level": { "type": "float", "range": [-1, 1], "desc": "loop 1 level (-1 = empty)" },
+    "loop1kind": { "type": "int", "range": [-1, 7], "desc": "loop 1 archetype" },
+    "loop1prog": { "type": "float", "range": [0, 1], "desc": "loop 1 playhead" },
+    "loop2x": { "type": "float", "range": [0, 1], "desc": "loop 2 X" },
+    "loop2y": { "type": "float", "range": [0, 1], "desc": "loop 2 Y" },
+    "loop2level": { "type": "float", "range": [-1, 1], "desc": "loop 2 level (-1 = empty)" },
+    "loop2kind": { "type": "int", "range": [-1, 7], "desc": "loop 2 archetype" },
+    "loop2prog": { "type": "float", "range": [0, 1], "desc": "loop 2 playhead" },
+    "loop3x": { "type": "float", "range": [0, 1], "desc": "loop 3 X" },
+    "loop3y": { "type": "float", "range": [0, 1], "desc": "loop 3 Y" },
+    "loop3level": { "type": "float", "range": [-1, 1], "desc": "loop 3 level (-1 = empty)" },
+    "loop3kind": { "type": "int", "range": [-1, 7], "desc": "loop 3 archetype" },
+    "loop3prog": { "type": "float", "range": [0, 1], "desc": "loop 3 playhead" },
     "temple":     { "type": "bool01", "desc": "healing mode (deeper breath + resolution, dimmer, warmer)" },
     "frozen":     { "type": "bool01", "desc": "Hold engaged (the pad is held instead of gliding)" },
     "hands":      { "type": "int", "range": [0, 2], "desc": "number of hands currently tracked" }

@@ -20,7 +20,7 @@ namespace Astrolab
     [Serializable]
     public class Field
     {
-        public const int Schema = 5;
+        public const int Schema = 6;
 
         // schema version of the last frame received (should equal Schema)
         public int v;
@@ -69,6 +69,13 @@ namespace Astrolab
         public int catchMode, objPresent, objFocus;
         public float objX = 0.5f, objY = 0.5f, objSize = 0.2f;
         public bool CatchMode => catchMode != 0;
+
+        // --- the spatial looper (flat proxy: only the playhead, never the tape) ---
+        public int loopCount;
+        public float loop0x = 0.5f, loop0y = 0.5f, loop0level = -1f, loop0prog; public int loop0kind = -1;
+        public float loop1x = 0.5f, loop1y = 0.5f, loop1level = -1f, loop1prog; public int loop1kind = -1;
+        public float loop2x = 0.5f, loop2y = 0.5f, loop2level = -1f, loop2prog; public int loop2kind = -1;
+        public float loop3x = 0.5f, loop3y = 0.5f, loop3level = -1f, loop3prog; public int loop3kind = -1;
 
         // --- decode tables (match field-spec.json) ---
         public static readonly string[] Modes     = { "aeolian", "dorian", "lydian", "phrygian", "ionian" };
@@ -170,6 +177,28 @@ namespace Astrolab
                 case "objY": objY = value; break;
                 case "objSize": objSize = value; break;
                 case "objFocus": objFocus = (int)value; break;
+
+                case "loopCount": loopCount = (int)value; break;
+                case "loop0x": loop0x = value; break;
+                case "loop0y": loop0y = value; break;
+                case "loop0level": loop0level = value; break;
+                case "loop0kind": loop0kind = (int)value; break;
+                case "loop0prog": loop0prog = value; break;
+                case "loop1x": loop1x = value; break;
+                case "loop1y": loop1y = value; break;
+                case "loop1level": loop1level = value; break;
+                case "loop1kind": loop1kind = (int)value; break;
+                case "loop1prog": loop1prog = value; break;
+                case "loop2x": loop2x = value; break;
+                case "loop2y": loop2y = value; break;
+                case "loop2level": loop2level = value; break;
+                case "loop2kind": loop2kind = (int)value; break;
+                case "loop2prog": loop2prog = value; break;
+                case "loop3x": loop3x = value; break;
+                case "loop3y": loop3y = value; break;
+                case "loop3level": loop3level = value; break;
+                case "loop3kind": loop3kind = (int)value; break;
+                case "loop3prog": loop3prog = value; break;
                 case "temple": temple = (int)value; break;
                 case "frozen": frozen = (int)value; break;
                 case "hands": hands = (int)value; break;

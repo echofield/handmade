@@ -115,6 +115,65 @@ const SmartConductor = (() => {
   return { enable, isOn, tick };
 })();
 
+// SPATIAL LOOPER — capture a short performance of struck notes and place it as a
+// persistent LoopNode that keeps playing and gently orbits. Event-based (re-triggers the
+// synth, not audio buffers), bar-quantized, up to 4 layers, all aligned to ONE epoch so
+// they stay in sync. This is a spatial looper, NOT a timeline DAW.
+const Loops = (() => {
+  const MAX = 4;
+  const sessionId = Math.random().toString(36).slice(2, 10);            // for future persistence ("land it in the city")
+  let masterLen = 0, epoch = 0, rec = null, loops = [];
+  // RULE 1 — bind the playhead to the AUDIO hardware clock, never a JS timer; a vision-model
+  // stall can't drift phase because every frame recomputes position by modulo from the epoch.
+  const aclock = () => (SoftSynth.ready ? SoftSynth.now() : performance.now() / 1000);
+  function isRec() { return !!rec; }
+  function start(hx, hy, kind) { if (!epoch) epoch = aclock(); rec = { hx, hy, kind, t0: aclock(), events: [] }; }
+  function note(midi) { if (rec) rec.events.push({ at: aclock(), midi }); }   // a struck note captured while recording
+  function stop() {
+    if (!rec) return;
+    const raw = Math.max(0.25, aclock() - rec.t0);
+    const len = masterLen ? Math.max(1, Math.round(raw / masterLen)) * masterLen : (masterLen = raw);   // FIRST loop sets the tempo
+    const events = rec.events.map((e) => ({ t: ((e.at - epoch) % len + len) % len, midi: e.midi }));    // events are simple {t,midi} — serializable
+    if (events.length) {
+      if (loops.length >= MAX) loops.shift();
+      loops.push({ hx: rec.hx, hy: rec.hy, kind: rec.kind, len, events, level: 0, active: 1, last: null, prog: 0, phase: Math.random() * TAU, createdAt: Date.now(), sessionId });
+    }
+    rec = null;
+  }
+  function tick() {                                                      // fire due events; phase from the audio clock
+    if (!epoch) return; const n = aclock();
+    for (const lp of loops) {
+      lp.level *= 0.90;                                                  // visual pulse decays
+      if (!lp.active) { lp.prog = 0; continue; }
+      const local = ((n - epoch) % lp.len + lp.len) % lp.len, prev = lp.last == null ? local : lp.last;
+      const fire = (e) => { SoftSynth.strike(e.midi); lp.level = 1; };
+      if (local >= prev) { for (const e of lp.events) if (e.t > prev && e.t <= local) fire(e); }
+      else { for (const e of lp.events) if (e.t > prev || e.t <= local) fire(e); }   // wrapped past the loop point
+      lp.last = local; lp.prog = local / lp.len;                        // 0..1 playhead for the orbital comet
+    }
+  }
+  function influence(present) {                                          // a hand near a loop emphasizes it
+    for (const lp of loops) for (let hi = 0; hi < present.length && hi < 2; hi++) {
+      const m = present[hi].m; if (Math.hypot((1 - m.px) - lp.hx, m.py - lp.hy) < 0.13) lp.level = Math.max(lp.level, 0.85);
+    }
+  }
+  // RULE 2 — flat fixed-width proxy: per loop only x, y, level (-1 = empty), kind, progress.
+  // The browser keeps the tape; Unity only ever sees the playhead.
+  function writeField() {
+    const n = aclock(); Field.loopCount = loops.length;
+    for (let i = 0; i < MAX; i++) {
+      const lp = loops[i];
+      Field['loop' + i + 'x'] = lp ? lp.hx + Math.cos(n * 0.3 + lp.phase) * 0.025 : 0.5;
+      Field['loop' + i + 'y'] = lp ? lp.hy + Math.sin(n * 0.3 + lp.phase) * 0.025 : 0.5;
+      Field['loop' + i + 'level'] = lp ? lp.level : -1;                 // -1 = inactive/empty slot
+      Field['loop' + i + 'kind'] = lp ? lp.kind : -1;
+      Field['loop' + i + 'prog'] = lp ? lp.prog : 0;
+    }
+  }
+  function snapshot() { return { sessionId, masterLen, loops: loops.map((l) => ({ hx: l.hx, hy: l.hy, kind: l.kind, len: l.len, events: l.events, createdAt: l.createdAt })) }; }   // portable JSON (future save)
+  return { isRec, start, note, stop, tick, influence, writeField, snapshot };
+})();
+
 // CHORD MODE — play full diatonic chords by hand position; the left-hand pose picks the
 // quality. Built from the live SCALE so chords stay in-key and follow Smart Mode's key.
 function diatonicChord(idx, pose) {
@@ -460,7 +519,7 @@ const SoftSynth = (() => {
     master.gain.setTargetAtTime(0, c.currentTime, 0.15);
     setTimeout(() => c.close(), 500); ctx = null;
   }
-  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, strike, hit, grabSynth, nodeDrone, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
+  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, strike, hit, grabSynth, nodeDrone, now: () => (ctx ? ctx.currentTime : 0), get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
 })();
 
 // =====================================================================
@@ -721,8 +780,8 @@ function detectKeys(present, t) {
         const vy = (ty - st.y) / dt;                                   // +y points down the screen
         if (vy > 2.2 && t - st.last > 0.16) {                          // a downward jab = a key strike
           st.last = t;
-          const tx = lm[tip].x, idx = clamp(((1 - tx) * SCALE.length) | 0, 0, SCALE.length - 1);
-          SoftSynth.strike(SCALE[idx] + (Field.register | 0));         // sound the note (web synth)
+          const tx = lm[tip].x, idx = clamp(((1 - tx) * SCALE.length) | 0, 0, SCALE.length - 1), midi = SCALE[idx] + (Field.register | 0);
+          SoftSynth.strike(midi); Loops.note(midi);                    // sound the note + feed the looper
           Field.strike = 1; Field.strikeX = 1 - tx;                    // flag the event for the bridge / visuals
         }
       }
@@ -800,7 +859,7 @@ writeNodeField();
 // CATCH — a REAL object becomes a Node. MediaPipe's Object Detector finds common
 // things (cup, bottle, book, phone…); we ignore 'person' so it locks onto what you
 // hold. Reach your hand onto the object and it sings — the world itself is the rack.
-let _caught = null, detector = null, detections = [], _lastDetT = 0, _bound = null, _prevPinchC = 0;
+let _caught = null, detector = null, detections = [], _lastDetT = 0, _bound = null, _prevPinchC = 0, _lastCatchT = 0, _catchTap = [];
 
 // the detected object (ignoring 'person') nearest a point, in mirrored screen space
 function nearestDetection(hx, hy) {
@@ -814,40 +873,46 @@ function nearestDetection(hx, hy) {
   return best;
 }
 
-// DELIBERATE CATCH — you PINCH to "analyse" the object in your hand; it binds THAT
-// object and then tracks only it. No ambient scanning, no flicker, no grabbing the bed.
-function updateCatch(present) {
+// PLACE & PLAY — pinch to DROP a pad where your hand is (themed by a real object if one's
+// there, else a plain pad). It STAYS PUT, so your hands are free to play it: tap near it to
+// strike a note (pitch by its position). Pinch the pad again to remove it. This is both the
+// fix for "if I hold it I can't play it" and the table-MIDI-pad — one mechanism.
+function updateCatch(present, t) {
   if (!video.videoWidth) return;
   const pinching = Field.pinch > 0.6;
-  if (pinching && _prevPinchC <= 0.6 && present.length) {                 // a pinch = analyse / (re)bind / release
-    const m = present[0].m, cand = nearestDetection(1 - m.px, m.py);
-    _bound = (cand && cand.dist < 0.25) ? { label: cand.label } : null;   // bind what's in your hand, or let go if nothing's there
-    if (_bound) _caught = cand;
+  if (pinching && _prevPinchC <= 0.6 && present.length) {                 // a pinch = place / re-theme / remove
+    const m = present[0].m, hx = 1 - m.px, hy = m.py;
+    if (_bound && Math.hypot(hx - _bound.cx, hy - _bound.cy) < 0.12) { _bound = null; }   // pinch the pad -> remove it
+    else {
+      const c = nearestDetection(hx, hy), near = c && c.dist < 0.22;
+      _bound = { cx: hx, cy: hy, label: near ? c.label : 'pad', w: near ? c.w : 0.16, h: near ? c.h : 0.16 };   // place a pad here
+    }
   }
   _prevPinchC = Field.pinch;
+  if (!_bound) { _caught = null; Field.objPresent = 0; return; }
 
-  if (!_bound) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
-
-  // track the bound object: the detection of the same kind nearest its last position
-  let track = null, bd = 1e9, vw = video.videoWidth, vh = video.videoHeight;
-  for (const d of detections) {
-    const c = d.categories && d.categories[0]; if (!c || c.categoryName !== _bound.label) continue;
-    const bb = d.boundingBox, cx = 1 - (bb.originX + bb.width / 2) / vw, cy = (bb.originY + bb.height / 2) / vh;
-    const ref = _caught ? Math.hypot(cx - _caught.cx, cy - _caught.cy) : 0;
-    if (ref < bd) { bd = ref; track = { cx, cy, w: bb.width / vw, h: bb.height / vh, label: _bound.label }; }
-  }
-  if (track) _caught = track;                                             // seen this frame -> update; else hold last position
-  if (!_caught) { Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
-  Field.objPresent = 1; Field.objX = _caught.cx; Field.objY = _caught.cy; Field.objSize = _caught.w;
-
-  let play = false, lvl = 0;
+  _caught = _bound; Field.objPresent = 1; Field.objX = _bound.cx; Field.objY = _bound.cy; Field.objSize = _bound.w;
+  const dt = Math.max(1e-3, t - _lastCatchT); _lastCatchT = t;
+  let focus = 0;
   for (let hi = 0; hi < present.length && hi < 2; hi++) {
-    const m = present[hi].m, d = Math.hypot((1 - m.px) - _caught.cx, m.py - _caught.cy);
-    if (d < Math.max(0.13, _caught.w * 0.7)) { play = true; lvl = Math.max(lvl, clamp(1 - d / 0.22, 0.2, 1)); }
+    const m = present[hi].m, hx = 1 - m.px, hy = m.py;
+    if (Math.hypot(hx - _bound.cx, hy - _bound.cy) < 0.17) {
+      focus = 1;
+      if (!_catchTap[hi]) _catchTap[hi] = { y: null, last: 0 };
+      const ty = present[hi].lm[8].y, st = _catchTap[hi];                  // index fingertip
+      if (st.y !== null) {
+        const vy = (ty - st.y) / dt;
+        if (vy > 2.0 && t - st.last > 0.13) {                             // a downward tap -> a note
+          st.last = t;
+          const idx = clamp((_bound.cx * SCALE.length) | 0, 0, SCALE.length - 1), midi = SCALE[idx] + (Field.register | 0);
+          SoftSynth.strike(midi); Loops.note(midi);                      // sound the note + feed the looper
+          Field.strike = 1; Field.strikeX = _bound.cx;                    // reuse the strike flash (web ripple + Unity)
+        }
+      }
+      st.y = ty;
+    }
   }
-  const idx = clamp((_caught.cx * SCALE.length) | 0, 0, SCALE.length - 1);
-  SoftSynth.grabSynth(play, SCALE[idx] + (Field.register | 0), clamp(1 - _caught.cy, 0, 1), lvl);   // the bound object sings; its position = pitch
-  Field.objFocus = play ? 1 : 0;
+  Field.objFocus = focus;
 }
 
 function interpret(results, t) {
@@ -924,7 +989,8 @@ function interpret(results, t) {
   }
 
   if (Field.objectsMode) updateNodes(present, t); else _lastNodeT = t;   // the room is the instrument
-  if (Field.catchMode) updateCatch(present);                             // a real object becomes the instrument
+  if (Field.catchMode) updateCatch(present, t);                          // a real object becomes the instrument
+  Loops.influence(present);                                              // hands emphasize nearby loops
 }
 
 // =====================================================================
@@ -1048,6 +1114,27 @@ function drawCaught() {
   ctx2.fillText(_caught.label.toUpperCase(), x, y - h / 2 - 8);
   ctx2.letterSpacing = '0px';
 }
+// THE LOOPS — persistent rings on the desk; a comet orbits each at its playhead. A loop
+// is a "memory" placed in space; the comet hitting the top is the downbeat. (Reads the flat
+// proxy in Field, the same data Unity gets.)
+function drawLoops() {
+  for (let i = 0; i < (Field.loopCount || 0); i++) {
+    const lv = Field['loop' + i + 'level']; if (lv == null || lv < 0) continue;
+    const x = Field['loop' + i + 'x'] * W, y = Field['loop' + i + 'y'] * H;
+    const kind = Field['loop' + i + 'kind'], prog = Field['loop' + i + 'prog'] || 0;
+    const hue = ARCH_HUE[kind] != null ? ARCH_HUE[kind] : 280, r = Math.min(W, H) * (0.06 + 0.04 * lv);
+    ctx2.globalCompositeOperation = 'lighter';
+    ctx2.strokeStyle = `hsla(${hue},65%,78%,${0.35 + 0.45 * lv})`; ctx2.lineWidth = 2;
+    ctx2.beginPath();
+    for (let k = 0; k <= 48; k++) { const a = k / 48 * TAU, xx = x + Math.cos(a) * r, yy = y + Math.sin(a) * r; k ? ctx2.lineTo(xx, yy) : ctx2.moveTo(xx, yy); }
+    ctx2.stroke();
+    const pa = -Math.PI / 2 + prog * TAU, px = x + Math.cos(pa) * r, py = y + Math.sin(pa) * r, cr = 8 + 12 * lv;   // orbital playhead
+    const cg = ctx2.createRadialGradient(px, py, 0, px, py, cr);
+    cg.addColorStop(0, `hsla(${hue},90%,86%,0.95)`); cg.addColorStop(1, `hsla(${hue},90%,70%,0)`);
+    ctx2.fillStyle = cg; ctx2.beginPath(); ctx2.arc(px, py, cr, 0, TAU); ctx2.fill();
+    ctx2.globalCompositeOperation = 'source-over';
+  }
+}
 // the temple's breath — a slow halo to breathe with; warms gold as coherence rises
 function drawBreath() {
   const cx = W / 2, cy = H / 2, base = Math.min(W, H) * 0.16;
@@ -1085,6 +1172,7 @@ function render(video, results, dt) {
   if (Field.melody || Field.chordMode) drawGrid();                  // melody/chord mode: reveal the in-key zones to aim at
   if (Field.objectsMode) drawNodes();                               // node mode: draw the archetypal objects in the room
   if (Field.catchMode) drawCaught();                                // catch mode: draw the real object that's become an instrument
+  drawLoops();                                                      // loops persist in any mode — the room's memory
 
   const hue = HUE[Field.mode] || 215;
   const hands = (results && results.landmarks) || [];
@@ -1150,7 +1238,7 @@ function render(video, results, dt) {
 // bridge change nothing about the instrument.
 // Field contract (see field-spec.json) — stable encodings so the whole Field
 // travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
-const SCHEMA_V = 5;
+const SCHEMA_V = 6;
 const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
@@ -1191,6 +1279,12 @@ const TDBridge = (() => {
         n3x: F.n3x, n3y: F.n3y, n3kind: F.n3kind, n3focus: F.n3focus, n3lvl: F.n3lvl,
         // a caught real object (webcam object detection)
         catchMode: F.catchMode, objPresent: F.objPresent, objX: F.objX, objY: F.objY, objSize: F.objSize, objFocus: F.objFocus,
+        // the spatial looper — flat proxy: per loop only x,y,level(-1=empty),kind,progress (the browser keeps the tape)
+        loopCount: F.loopCount,
+        loop0x: F.loop0x, loop0y: F.loop0y, loop0level: F.loop0level, loop0kind: F.loop0kind, loop0prog: F.loop0prog,
+        loop1x: F.loop1x, loop1y: F.loop1y, loop1level: F.loop1level, loop1kind: F.loop1kind, loop1prog: F.loop1prog,
+        loop2x: F.loop2x, loop2y: F.loop2y, loop2level: F.loop2level, loop2kind: F.loop2kind, loop2prog: F.loop2prog,
+        loop3x: F.loop3x, loop3y: F.loop3y, loop3level: F.loop3level, loop3kind: F.loop3kind, loop3prog: F.loop3prog,
         temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}
@@ -1214,6 +1308,7 @@ function loop(now) {
   }
   Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
   if (running) SmartConductor.tick(now / 1000);                       // the conductor drifts the harmony onward
+  if (running) { Loops.tick(); Loops.writeField(); }                  // spatial looper: fire due events + publish playheads
   if (running) for (const k of activeEngines) ENGINES[k].update(Field);
   if (running) TDBridge.send(Field);                                 // stream the Field to TouchDesigner (localhost only)
   render(video, results, dt);
@@ -1289,6 +1384,15 @@ $('objects').addEventListener('click', () => { Field.objectsMode = Field.objects
 $('catch').addEventListener('click', async () => {
   Field.catchMode = Field.catchMode ? 0 : 1; $('catch').classList.toggle('active', !!Field.catchMode);
   if (Field.catchMode && !detector) { $('catch').textContent = 'loading…'; await makeDetector(); $('catch').textContent = 'Catch'; }   // lazy-load the model on first use
+});
+$('loop').addEventListener('click', () => {                              // deliberate commit — no phantom-release jitter
+  if (Loops.isRec()) { Loops.stop(); $('loop').classList.remove('active'); $('loop').textContent = 'Loop'; }
+  else {
+    const hx = (Field.catchMode && _bound) ? _bound.cx : Field.h1x;      // place the loop where you're playing
+    const hy = (Field.catchMode && _bound) ? _bound.cy : Field.h1y;
+    Loops.start(hx, hy, 7);                                              // kind 7 = "memory" — a captured loop (V27 grammar)
+    $('loop').classList.add('active'); $('loop').textContent = 'Rec ●';
+  }
 });
 $('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
 $('rec').addEventListener('click', toggleRecord);
