@@ -717,6 +717,33 @@ function render(video, results, dt) {
 // =====================================================================
 // MAIN LOOP + UI
 // =====================================================================
+// TouchDesigner / OSC bridge — streams the whole Field to a local relay (td-bridge.js)
+// which forwards it as OSC. Localhost-only and silent-fail: prod and a missing
+// bridge change nothing about the instrument.
+const TDBridge = (() => {
+  let ws = null, lastTry = 0;
+  const local = ['localhost', '127.0.0.1'].includes(location.hostname);
+  function ensure() {
+    if (!local || (ws && ws.readyState <= 1)) return;          // connecting or open
+    const now = performance.now();
+    if (now - lastTry < 3000) return; lastTry = now;           // retry at most every 3s
+    try { ws = new WebSocket('ws://127.0.0.1:8765'); ws.onerror = () => {}; ws.onclose = () => { ws = null; }; }
+    catch (e) { ws = null; }
+  }
+  function send(F) {
+    ensure();
+    if (!ws || ws.readyState !== 1) return;
+    try {
+      ws.send(JSON.stringify({
+        pitch: F.pitch, brightness: F.brightness, intensity: F.intensity, openness: F.openness,
+        motion: F.motion, calm: F.calm, union: F.union, melody: F.melody, grasp: F.grasp,
+        pinch: F.pinch, twist: F.twist, beat: F.beat, hands: F.hands, register: F.register,
+      }));
+    } catch (e) {}
+  }
+  return { send };
+})();
+
 const video = document.getElementById('cam');
 let landmarker = null, results = null, lastVT = -1, running = false, last = performance.now();
 
@@ -729,6 +756,7 @@ function loop(now) {
   }
   Field.breath = 0.5 + 0.5 * Math.sin((now / 1000) * 0.092 * TAU);   // the temple breathes ~5.5/min (coherence)
   if (running) for (const k of activeEngines) ENGINES[k].update(Field);
+  if (running) TDBridge.send(Field);                                 // stream the Field to TouchDesigner (localhost only)
   render(video, results, dt);
   requestAnimationFrame(loop);
 }
