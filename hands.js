@@ -800,28 +800,53 @@ writeNodeField();
 // CATCH — a REAL object becomes a Node. MediaPipe's Object Detector finds common
 // things (cup, bottle, book, phone…); we ignore 'person' so it locks onto what you
 // hold. Reach your hand onto the object and it sings — the world itself is the rack.
-let _caught = null, detector = null, detections = [], _lastDetT = 0;   // caught object + the object-detector state
-function updateCatch(present) {
-  if (!detections.length || !video.videoWidth) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
-  let best = null;
+let _caught = null, detector = null, detections = [], _lastDetT = 0, _bound = null, _prevPinchC = 0;
+
+// the detected object (ignoring 'person') nearest a point, in mirrored screen space
+function nearestDetection(hx, hy) {
+  let best = null, bd = 1e9, vw = video.videoWidth, vh = video.videoHeight;
   for (const d of detections) {
     const c = d.categories && d.categories[0]; if (!c || c.categoryName === 'person') continue;
-    if (!best || c.score > best.categories[0].score) best = d;
+    const bb = d.boundingBox, cx = 1 - (bb.originX + bb.width / 2) / vw, cy = (bb.originY + bb.height / 2) / vh;
+    const dist = Math.hypot(hx - cx, hy - cy);
+    if (dist < bd) { bd = dist; best = { cx, cy, w: bb.width / vw, h: bb.height / vh, label: c.categoryName || 'object', dist }; }
   }
-  if (!best) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
-  const bb = best.boundingBox, vw = video.videoWidth, vh = video.videoHeight;
-  const cx = 1 - (bb.originX + bb.width / 2) / vw;          // mirrored to match the view
-  const cy = (bb.originY + bb.height / 2) / vh;
-  _caught = { label: best.categories[0].categoryName || 'object', cx, cy, w: bb.width / vw, h: bb.height / vh };
-  Field.objPresent = 1; Field.objX = cx; Field.objY = cy; Field.objSize = _caught.w;
+  return best;
+}
+
+// DELIBERATE CATCH — you PINCH to "analyse" the object in your hand; it binds THAT
+// object and then tracks only it. No ambient scanning, no flicker, no grabbing the bed.
+function updateCatch(present) {
+  if (!video.videoWidth) return;
+  const pinching = Field.pinch > 0.6;
+  if (pinching && _prevPinchC <= 0.6 && present.length) {                 // a pinch = analyse / (re)bind / release
+    const m = present[0].m, cand = nearestDetection(1 - m.px, m.py);
+    _bound = (cand && cand.dist < 0.25) ? { label: cand.label } : null;   // bind what's in your hand, or let go if nothing's there
+    if (_bound) _caught = cand;
+  }
+  _prevPinchC = Field.pinch;
+
+  if (!_bound) { _caught = null; Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
+
+  // track the bound object: the detection of the same kind nearest its last position
+  let track = null, bd = 1e9, vw = video.videoWidth, vh = video.videoHeight;
+  for (const d of detections) {
+    const c = d.categories && d.categories[0]; if (!c || c.categoryName !== _bound.label) continue;
+    const bb = d.boundingBox, cx = 1 - (bb.originX + bb.width / 2) / vw, cy = (bb.originY + bb.height / 2) / vh;
+    const ref = _caught ? Math.hypot(cx - _caught.cx, cy - _caught.cy) : 0;
+    if (ref < bd) { bd = ref; track = { cx, cy, w: bb.width / vw, h: bb.height / vh, label: _bound.label }; }
+  }
+  if (track) _caught = track;                                             // seen this frame -> update; else hold last position
+  if (!_caught) { Field.objPresent = 0; SoftSynth.grabSynth(false); return; }
+  Field.objPresent = 1; Field.objX = _caught.cx; Field.objY = _caught.cy; Field.objSize = _caught.w;
 
   let play = false, lvl = 0;
   for (let hi = 0; hi < present.length && hi < 2; hi++) {
-    const m = present[hi].m, d = Math.hypot((1 - m.px) - cx, m.py - cy);
+    const m = present[hi].m, d = Math.hypot((1 - m.px) - _caught.cx, m.py - _caught.cy);
     if (d < Math.max(0.13, _caught.w * 0.7)) { play = true; lvl = Math.max(lvl, clamp(1 - d / 0.22, 0.2, 1)); }
   }
-  const idx = clamp((cx * SCALE.length) | 0, 0, SCALE.length - 1);
-  SoftSynth.grabSynth(play, SCALE[idx] + (Field.register | 0), clamp(1 - cy, 0, 1), lvl);   // the object sings; its position = pitch
+  const idx = clamp((_caught.cx * SCALE.length) | 0, 0, SCALE.length - 1);
+  SoftSynth.grabSynth(play, SCALE[idx] + (Field.register | 0), clamp(1 - _caught.cy, 0, 1), lvl);   // the bound object sings; its position = pitch
   Field.objFocus = play ? 1 : 0;
 }
 
@@ -1002,6 +1027,11 @@ function drawNodes() {
 // THE CAUGHT OBJECT — a reticle + label around the real thing you're holding;
 // it glows when a hand is on it (the object is sounding).
 function drawCaught() {
+  if (!_bound) {                                          // idle: invite a deliberate bind
+    ctx2.fillStyle = 'rgba(236,231,218,.5)'; ctx2.font = 'italic 16px Georgia'; ctx2.textAlign = 'center';
+    ctx2.fillText('hold an object · pinch to bind it', W / 2, H * 0.82);
+    return;
+  }
   if (!_caught) return;
   const x = _caught.cx * W, y = _caught.cy * H, w = _caught.w * W, h = _caught.h * H, hue = 170;
   const lit = Field.objFocus ? 1 : 0;
