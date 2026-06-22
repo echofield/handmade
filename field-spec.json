@@ -1,0 +1,54 @@
+{
+  "$comment": "ASTROLAB FIELD — the engine-agnostic control surface. hands (or any future input) WRITE the Field; sound, visuals, worlds READ it. This file is the single source of truth shared by the web instrument (hands.js), the OSC relay (td-bridge.js), and any reader (Unity/OscJack, TouchDesigner). Bump `version` on any breaking change.",
+  "version": 1,
+  "transport": {
+    "websocket": { "host": "127.0.0.1", "port": 8765, "note": "browser -> relay (the browser cannot speak UDP/OSC)" },
+    "osc": {
+      "host": "127.0.0.1",
+      "ports": { "touchdesigner": 7000, "unity": 9000 },
+      "address": "/field/<name>",
+      "argument": "single 32-bit float, big-endian",
+      "note": "the relay (td-bridge.js) forwards every numeric channel below as one OSC float message per name"
+    }
+  },
+  "channels": {
+    "v": { "type": "int", "desc": "schema version of this Field frame (matches `version` above)" },
+
+    "pitch":      { "type": "float", "range": [0, 1], "desc": "position within the active scale (left..right of the playing hand)" },
+    "brightness": { "type": "float", "range": [0, 1], "desc": "spectral openness / filter (hand low..high)" },
+    "intensity":  { "type": "float", "range": [0, 1], "desc": "body / presence / loudness (closer to camera = more)" },
+    "proximity":  { "type": "float", "range": [0, 1], "desc": "closeness -> intimacy (tracks intensity)" },
+    "openness":   { "type": "float", "range": [0, 1], "desc": "reverb / space (open hand)" },
+    "motion":     { "type": "float", "range": [0, 1], "desc": "movement -> vibrato / drift" },
+    "stillness":  { "type": "float", "range": [0, 1], "desc": "derived: how settled the hand is" },
+    "calm":       { "type": "float", "range": [0, 1], "desc": "sustained stillness -> coherence (rewarded with resolution)" },
+    "breath":     { "type": "float", "range": [0, 1], "desc": "the temple's slow breath (~5.5/min) -> swell" },
+    "union":      { "type": "float", "range": [0, 1], "desc": "two hands brought together -> binaural entrainment" },
+    "grasp":      { "type": "float", "range": [0, 1], "desc": "fist: fingers curled -> choke / intimacy" },
+    "pinch":      { "type": "float", "range": [0, 1], "desc": "thumb + index together -> a summoned star" },
+    "twist":      { "type": "float", "range": [0, 1], "desc": "wrist rotation (in-plane) -> timbre / chorus / glyph spin" },
+    "accent":     { "type": "float", "range": [0, 1], "desc": "transient: a swipe / grasp stroke (decays)" },
+    "bloom":      { "type": "float", "range": [0, 1], "desc": "transient: a release or chord change -> reverb / shimmer swell" },
+    "body":       { "type": "float", "range": [0, 1], "desc": "transient: a rhythmic onset -> low body thump" },
+
+    "register":   { "type": "int",   "range": [-12, 24], "desc": "octave shift in semitones from a pose (e.g. thumb-up = +12)" },
+    "beat":       { "type": "float", "range": [4, 14],   "desc": "binaural beat frequency (Hz); apart = fast, together = theta" },
+    "tempo":      { "type": "float", "range": [0.15, 2.0], "desc": "seconds between rhythmic onsets (the hand's pulse)" },
+
+    "root":       { "type": "int", "range": [0, 11], "desc": "tonic as a pitch class (0=C .. 11=B)" },
+    "modeIdx":    { "type": "int", "range": [0, 4], "desc": "index into modes[] below" },
+    "gestureIdx": { "type": "int", "range": [-1, 7], "desc": "index into poses[] below (-1 = unknown)" },
+    "chordVoices":{ "type": "int", "range": [1, 4], "desc": "number of voices in the current chord = sides of the chord glyph (1=point, 2=line, 3=triangle, 4=square)" },
+
+    "melody":     { "type": "bool01", "desc": "melody mode active (left fist pedals, right hand strikes in-key)" },
+    "chordMode":  { "type": "bool01", "desc": "chord mode active (hand position plays a full diatonic chord)" },
+    "temple":     { "type": "bool01", "desc": "healing mode (deeper breath + resolution, dimmer, warmer)" },
+    "frozen":     { "type": "bool01", "desc": "Hold engaged (the pad is held instead of gliding)" },
+    "hands":      { "type": "int", "range": [0, 2], "desc": "number of hands currently tracked" }
+  },
+  "modes": ["aeolian", "dorian", "lydian", "phrygian", "ionian"],
+  "modeHue": { "aeolian": 215, "dorian": 190, "lydian": 280, "phrygian": 25, "ionian": 45 },
+  "poses": ["fist", "point", "peace", "three", "open", "thumb", "claw", "L"],
+  "noteNames": ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
+  "tuning": { "a4": 432, "note": "the instrument is tuned to A=432" }
+}

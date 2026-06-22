@@ -14,7 +14,7 @@ const dgram = require('dgram');
 
 const WS_PORT = 8765;        // hands.js connects here (ws://127.0.0.1:8765)
 const OSC_HOST = '127.0.0.1';
-const OSC_PORT = 7000;       // TouchDesigner OSC In CHOP listens here
+const OSC_PORTS = [7000, 9000];   // every Field frame is fanned out to: 7000 = TouchDesigner · 9000 = Unity (OscJack)
 
 const udp = dgram.createSocket('udp4');
 
@@ -32,7 +32,7 @@ function sendField(obj) {
     const v = Number(obj[k]);
     if (!isFinite(v)) continue;
     const msg = oscFloat('/field/' + k, v);
-    udp.send(msg, 0, msg.length, OSC_PORT, OSC_HOST);
+    for (const port of OSC_PORTS) udp.send(msg, 0, msg.length, port, OSC_HOST);   // fan out to every reader
   }
 }
 
@@ -80,6 +80,7 @@ server.on('upgrade', (req, socket) => {
 });
 
 server.listen(WS_PORT, '127.0.0.1', () => {
-  console.log('TD bridge up.  ws://127.0.0.1:' + WS_PORT + '  ->  OSC ' + OSC_HOST + ':' + OSC_PORT);
-  console.log('In TouchDesigner: add an "OSC In CHOP", Network Port = ' + OSC_PORT + ', Active = On.');
+  console.log('Field bridge up.  ws://127.0.0.1:' + WS_PORT + '  ->  OSC ' + OSC_HOST + ':' + OSC_PORTS.join(',') + '  (/field/<name>)');
+  console.log('TouchDesigner: add an "OSC In CHOP", Network Port = 7000, Active = On.');
+  console.log('Unity (OscJack): add an "OSC Event Receiver"/connection on UDP port 9000.');
 });

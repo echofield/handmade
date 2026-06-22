@@ -870,6 +870,10 @@ function render(video, results, dt) {
 // TouchDesigner / OSC bridge — streams the whole Field to a local relay (td-bridge.js)
 // which forwards it as OSC. Localhost-only and silent-fail: prod and a missing
 // bridge change nothing about the instrument.
+// Field contract (see field-spec.json) — stable encodings so the whole Field
+// travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
+const SCHEMA_V = 1;
+const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
@@ -885,9 +889,20 @@ const TDBridge = (() => {
     if (!ws || ws.readyState !== 1) return;
     try {
       ws.send(JSON.stringify({
-        pitch: F.pitch, brightness: F.brightness, intensity: F.intensity, openness: F.openness,
-        motion: F.motion, calm: F.calm, union: F.union, melody: F.melody, grasp: F.grasp,
-        pinch: F.pinch, twist: F.twist, beat: F.beat, hands: F.hands, register: F.register,
+        v: SCHEMA_V,
+        // continuous expression (0..1)
+        pitch: F.pitch, brightness: F.brightness, intensity: F.intensity, proximity: F.proximity,
+        openness: F.openness, motion: F.motion, stillness: F.stillness, calm: F.calm,
+        breath: F.breath, union: F.union, grasp: F.grasp, pinch: F.pinch, twist: F.twist,
+        accent: F.accent, bloom: F.bloom, body: F.body,
+        // shaped scalars
+        register: F.register, beat: F.beat, tempo: F.tempo,
+        // harmony / key — numeric encodings so the contract stays float-only over OSC
+        root: F.root, modeIdx: MODE_NAMES.indexOf(F.mode),
+        gestureIdx: POSE_ORDER.indexOf(F.gesture), chordVoices: chordVoices(F),
+        // discrete states (0/1)
+        melody: F.melody, chordMode: F.chordMode,
+        temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}
   }
