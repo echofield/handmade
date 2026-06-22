@@ -62,6 +62,7 @@ const Field = {
   strikeX:0.5,     // horizontal position (0..1) of the last strike -> where to flash
   h0x:0.5, h0y:0.5, h1x:0.5, h1y:0.5,   // two hand anchors in screen space (mirrored to match the view) -> pin objects
   span:0.0,        // distance between the two hands (0..1) -> scale an object held between them
+  objectsMode:0,   // the room is the instrument: archetypal Nodes you reach into to play
   accent:0.0,      // transient: a swipe / grasp stroke (decays) -> filter + gain bump
   bloom:0.0,       // transient: a release (fist -> open) -> reverb / shimmer swell
   twist:0.5,       // wrist rotation (in-plane) -> timbre / chorus width
@@ -266,6 +267,17 @@ const SoftSynth = (() => {
     }
     leadPtr = 0; lastLeadIdx = -1;
 
+    // GRABBED SYNTH — the synth node's voice (a filtered saw), gated by reaching into the node
+    osc.gsyn = mkOsc(); osc.gsyn.type = 'sawtooth';
+    osc.gsynF = ctx.createBiquadFilter(); osc.gsynF.type = 'lowpass'; osc.gsynF.frequency.value = 1200; osc.gsynF.Q.value = 0.7;
+    osc.gGsyn = ctx.createGain(); osc.gGsyn.gain.value = 0;
+    osc.gsyn.connect(osc.gsynF); osc.gsynF.connect(osc.gGsyn); osc.gGsyn.connect(master); osc.gGsyn.connect(rev);
+
+    // SATURN'S DRONE — two detuned sines, a low structural hum held while you reach into the node
+    osc.gdrA = mkOsc(); osc.gdrB = mkOsc(); osc.gdrB.detune.value = 8;
+    osc.gGdr = ctx.createGain(); osc.gGdr.gain.value = 0;
+    osc.gdrA.connect(osc.gGdr); osc.gdrB.connect(osc.gGdr); osc.gGdr.connect(master); osc.gGdr.connect(rev);
+
     curMidi = SCALE[(SCALE.length / 2) | 0];
     if (ctx.state === 'suspended') ctx.resume();
     master.gain.linearRampToValueAtTime(0.75, ctx.currentTime + 3);
@@ -293,7 +305,7 @@ const SoftSynth = (() => {
     const calmPure = lerp(1, 0.4, F.calm);                                    // stillness -> purer (less beating/shimmer)
     const lowTilt = 1 - F.brightness, highTilt = F.brightness;               // VERTICAL THEREMIN: hand low -> sub/dark, high -> air/fx
     const amp = F.frozen ? Math.max(F.intensity, 0.5) : F.intensity;          // closer to camera = more sound
-    voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp) * (1 + F.accent * 0.25) * breathSwell, now, 0.12);
+    voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp) * (1 + F.accent * 0.25) * breathSwell * (F.objectsMode ? 0.12 : 1), now, 0.12);   // node mode: the drone recedes, the objects speak
     filt.frequency.setTargetAtTime((lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * calmDark * lerp(1, 1.12, F.breath) + F.accent * 3000) * lerp(1, 0.3, F.grasp), now, 0.06);
     osc.gShim.gain.setTargetAtTime((lerp(0, 0.28, highTilt) + F.bloom * 0.15) * calmPure, now, 0.25);
     if (osc.gSub) osc.gSub.gain.setTargetAtTime(lerp(0.5, 0.95, lowTilt) * lerp(1, 0.6, F.grasp), now, 0.12);  // hand drops -> the sub swells up
@@ -398,13 +410,55 @@ const SoftSynth = (() => {
     if (!ctx) return; const now = ctx.currentTime;
     for (const v of frozen) v.fg.gain.setTargetAtTime(0, now, 0.8);
   }
+  // a one-shot white-noise source (for snare/hat transients)
+  function noiseBurst(dur) {
+    const len = (ctx.sampleRate * dur) | 0, b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const s = ctx.createBufferSource(); s.buffer = b; return s;
+  }
+  // DRUM NODE — synthesized percussion; the hand's height picks the piece
+  function hit(kind) {
+    if (!ctx) return; const now = ctx.currentTime;
+    if (kind === 'kick') {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.setValueAtTime(150, now); o.frequency.exponentialRampToValueAtTime(48, now + 0.12);
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.95, now + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+      o.connect(g); g.connect(master); g.connect(rev); o.start(now); o.stop(now + 0.32);
+    } else if (kind === 'snare') {
+      const nb = noiseBurst(0.2), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.6, now + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+      nb.connect(bp); bp.connect(g); g.connect(master); g.connect(rev); nb.start(now); nb.stop(now + 0.2);
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.frequency.value = 190; og.gain.setValueAtTime(0.3, now); og.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+      o.connect(og); og.connect(master); o.start(now); o.stop(now + 0.13);
+    } else {                                                       // hat
+      const nb = noiseBurst(0.05), hp = ctx.createBiquadFilter(), g = ctx.createGain();
+      hp.type = 'highpass'; hp.frequency.value = 7000;
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.3, now + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+      nb.connect(hp); hp.connect(g); g.connect(master); nb.start(now); nb.stop(now + 0.06);
+    }
+  }
+  // OCEAN's voice — a sustained nappe held while you reach into the node
+  function grabSynth(on, midi, bright, level) {
+    if (!ctx) return; const now = ctx.currentTime;
+    if (on) { osc.gsyn.frequency.setTargetAtTime(midiToFreq(midi), now, 0.04); osc.gsynF.frequency.setTargetAtTime(lerp(400, 4200, bright), now, 0.06); }
+    osc.gGsyn.gain.setTargetAtTime(on ? 0.2 * level : 0, now, 0.06);
+  }
+  // SATURN's voice — a low structural drone
+  function nodeDrone(on, midi, level) {
+    if (!ctx) return; const now = ctx.currentTime;
+    if (on) { osc.gdrA.frequency.setTargetAtTime(midiToFreq(midi), now, 0.12); osc.gdrB.frequency.setTargetAtTime(midiToFreq(midi), now, 0.12); }
+    osc.gGdr.gain.setTargetAtTime(on ? 0.18 * level : 0, now, 0.2);
+  }
+
   function stop() {
     if (!ctx) return; const c = ctx;
     master.gain.cancelScheduledValues(c.currentTime);
     master.gain.setTargetAtTime(0, c.currentTime, 0.15);
     setTimeout(() => c.close(), 500); ctx = null;
   }
-  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, strike, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
+  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, strike, hit, grabSynth, nodeDrone, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
 })();
 
 // =====================================================================
@@ -675,6 +729,71 @@ function detectKeys(present, t) {
   }
 }
 
+// THE GRAMMAR — a Node is generic: it exposes sound · visual · meaning · behavior.
+// We instantiate ARCHETYPES, never "drum/synth". Sound is one manifestation among four;
+// the others (visual in Unity, meaning, behavior) hang off the same key. Space is the interface.
+const ARCHETYPES = ['fire', 'ocean', 'saturn', 'sun', 'moon', 'tree', 'wind', 'memory'];
+const NODES = [
+  { key: 'fire',   kind: 0, x: 0.30, y: 0.56, sound: 'perc',  reach: 0.20 },   // action
+  { key: 'ocean',  kind: 1, x: 0.70, y: 0.56, sound: 'pad',   reach: 0.20 },   // calm
+  { key: 'saturn', kind: 2, x: 0.50, y: 0.30, sound: 'drone', reach: 0.20 },   // structure
+];
+let _nodeFx = NODES.map(() => ({ focus: 0, level: 0 })), _nodeTap = [], _lastNodeT = 0;
+
+function updateNodes(present, t) {
+  const dt = Math.max(1e-3, t - _lastNodeT); _lastNodeT = t;
+  const focus = NODES.map(() => 0);
+  let padOn = false, padMidi = 60, padBright = 0.5, padLvl = 0, droOn = false, droMidi = 33, droLvl = 0;
+
+  for (let hi = 0; hi < present.length && hi < 2; hi++) {
+    const m = present[hi].m, hx = 1 - m.px, hy = m.py;            // hand in mirrored screen space (matches node coords)
+    let best = -1, bd = 1e9;
+    for (let ni = 0; ni < NODES.length; ni++) {
+      const d = Math.hypot(hx - NODES[ni].x, hy - NODES[ni].y);
+      if (d < NODES[ni].reach && d < bd) { bd = d; best = ni; }
+    }
+    if (best < 0) continue;
+    focus[best] = 1;
+    const node = NODES[best], near = clamp(1 - bd / node.reach, 0.15, 1);
+    if (node.sound === 'perc') {                                  // FIRE — taps strike percussion; height picks the piece
+      if (!_nodeTap[hi]) _nodeTap[hi] = { y: null, last: 0 };
+      const ty = present[hi].lm[8].y, st = _nodeTap[hi];
+      if (st.y !== null) {
+        const vy = (ty - st.y) / dt;
+        if (vy > 2.0 && t - st.last > 0.13) { st.last = t; SoftSynth.hit(hy > 0.62 ? 'kick' : hy > 0.42 ? 'snare' : 'hat'); _nodeFx[best].level = 1; }
+      }
+      st.y = ty;
+    } else if (node.sound === 'pad') {                            // OCEAN — reach sings a nappe; x=pitch, height=brightness
+      const idx = clamp((hx * SCALE.length) | 0, 0, SCALE.length - 1);
+      padOn = true; padMidi = SCALE[idx] + (Field.register | 0); padBright = clamp(1 - hy, 0, 1); padLvl = near; _nodeFx[best].level = near;
+    } else if (node.sound === 'drone') {                          // SATURN — a low structural hum, an octave down
+      const idx = clamp((hx * SCALE.length) | 0, 0, SCALE.length - 1);
+      droOn = true; droMidi = SCALE[idx] - 12; droLvl = near; _nodeFx[best].level = near;
+    }
+  }
+
+  SoftSynth.grabSynth(padOn, padMidi, padBright, padLvl);
+  SoftSynth.nodeDrone(droOn, droMidi, droLvl);
+  for (let ni = 0; ni < NODES.length; ni++) {
+    _nodeFx[ni].focus = focus[ni];
+    if (NODES[ni].sound === 'perc') _nodeFx[ni].level *= 0.82;    // a decaying flash
+    else if (!focus[ni]) _nodeFx[ni].level *= 0.85;              // sustained levels ease off on release
+  }
+  writeNodeField();
+}
+
+// publish node state to the Field so Unity can render each archetype (up to 4 slots)
+function writeNodeField() {
+  Field.nodeCount = NODES.length;
+  for (let i = 0; i < 4; i++) {
+    const n = NODES[i], fx = _nodeFx[i];
+    Field['n' + i + 'x'] = n ? n.x : 0.5; Field['n' + i + 'y'] = n ? n.y : 0.5;
+    Field['n' + i + 'kind'] = n ? n.kind : -1;
+    Field['n' + i + 'focus'] = fx ? fx.focus : 0; Field['n' + i + 'lvl'] = fx ? fx.level : 0;
+  }
+}
+writeNodeField();
+
 function interpret(results, t) {
   const hands = (results && results.landmarks) || [];
   Field.hands = hands.length;
@@ -686,6 +805,7 @@ function interpret(results, t) {
     Field.grasp = lerp(Field.grasp, 0, 0.08);
     Field.pinch = lerp(Field.pinch, 0, 0.1);
     Field.calm = lerp(Field.calm, 0.85, 0.008);                   // rest -> coherence rises
+    if (Field.objectsMode) { SoftSynth.grabSynth(false); SoftSynth.nodeDrone(false); }   // hands gone -> node voices release
     poseHold('open');
     return;                                   // pitch & co. hold where they were
   }
@@ -746,6 +866,8 @@ function interpret(results, t) {
   } else {
     Field.h0x = Field.h1x = 1 - voice.m.px; Field.h0y = Field.h1y = voice.m.py; Field.span = 0;
   }
+
+  if (Field.objectsMode) updateNodes(present, t); else _lastNodeT = t;   // the room is the instrument
 }
 
 // =====================================================================
@@ -915,7 +1037,7 @@ function render(video, results, dt) {
 // bridge change nothing about the instrument.
 // Field contract (see field-spec.json) — stable encodings so the whole Field
 // travels as OSC floats. Bump SCHEMA_V with any breaking change to the channels.
-const SCHEMA_V = 3;
+const SCHEMA_V = 4;
 const POSE_ORDER = ['fist', 'point', 'peace', 'three', 'open', 'thumb', 'claw', 'L'];
 const TDBridge = (() => {
   let ws = null, lastTry = 0;
@@ -948,6 +1070,12 @@ const TDBridge = (() => {
         strike: F.strike, strikeX: F.strikeX,
         // hand anchors -> pin objects to / between the hands
         h0x: F.h0x, h0y: F.h0y, h1x: F.h1x, h1y: F.h1y, span: F.span,
+        // the Nodes (archetypal objects in space) — up to 4 slots
+        objectsMode: F.objectsMode, nodeCount: F.nodeCount,
+        n0x: F.n0x, n0y: F.n0y, n0kind: F.n0kind, n0focus: F.n0focus, n0lvl: F.n0lvl,
+        n1x: F.n1x, n1y: F.n1y, n1kind: F.n1kind, n1focus: F.n1focus, n1lvl: F.n1lvl,
+        n2x: F.n2x, n2y: F.n2y, n2kind: F.n2kind, n2focus: F.n2focus, n2lvl: F.n2lvl,
+        n3x: F.n3x, n3y: F.n3y, n3kind: F.n3kind, n3focus: F.n3focus, n3lvl: F.n3lvl,
         temple: F.temple ? 1 : 0, frozen: F.frozen ? 1 : 0, hands: F.hands,
       }));
     } catch (e) {}
@@ -1026,6 +1154,7 @@ $('smart').addEventListener('click', () => { SmartConductor.enable(!SmartConduct
 $('pulse').addEventListener('click', () => { const on = !SoftSynth.pulseOn; SoftSynth.setPulse(on); $('pulse').classList.toggle('active', on); });
 $('chords').addEventListener('click', () => { Field.chordMode = Field.chordMode ? 0 : 1; $('chords').classList.toggle('active', !!Field.chordMode); });
 $('keys').addEventListener('click', () => { Field.keysMode = Field.keysMode ? 0 : 1; $('keys').classList.toggle('active', !!Field.keysMode); });
+$('objects').addEventListener('click', () => { Field.objectsMode = Field.objectsMode ? 0 : 1; $('objects').classList.toggle('active', !!Field.objectsMode); });
 $('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
 $('rec').addEventListener('click', toggleRecord);
 

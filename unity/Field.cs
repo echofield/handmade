@@ -20,7 +20,7 @@ namespace Astrolab
     [Serializable]
     public class Field
     {
-        public const int Schema = 3;
+        public const int Schema = 4;
 
         // schema version of the last frame received (should equal Schema)
         public int v;
@@ -52,6 +52,18 @@ namespace Astrolab
         // --- hand anchors (normalized screen space, 0=top/left .. 1=bottom/right) ---
         public float h0x = 0.5f, h0y = 0.5f, h1x = 0.5f, h1y = 0.5f;
         public float span;      // distance between the two hands (0 when <2 hands)
+
+        // --- the Nodes (archetypal objects in space) — up to 4 slots ---
+        public int objectsMode, nodeCount;
+        public float n0x, n0y, n1x, n1y, n2x, n2y, n3x, n3y;
+        public int n0kind = -1, n1kind = -1, n2kind = -1, n3kind = -1;
+        public int n0focus, n1focus, n2focus, n3focus;
+        public float n0lvl, n1lvl, n2lvl, n3lvl;
+
+        public static readonly string[] Archetypes = { "fire", "ocean", "saturn", "sun", "moon", "tree", "wind", "memory" };
+        public static readonly float[] ArchetypeHue = { 18f, 200f, 45f, 50f, 230f, 130f, 170f, 280f };
+        public bool ObjectsMode => objectsMode != 0;
+        public string ArchetypeName(int kind) => (kind >= 0 && kind < Archetypes.Length) ? Archetypes[kind] : "";
 
         // --- decode tables (match field-spec.json) ---
         public static readonly string[] Modes     = { "aeolian", "dorian", "lydian", "phrygian", "ionian" };
@@ -123,6 +135,29 @@ namespace Astrolab
                 case "h1x": h1x = value; break;
                 case "h1y": h1y = value; break;
                 case "span": span = value; break;
+
+                case "objectsMode": objectsMode = (int)value; break;
+                case "nodeCount": nodeCount = (int)value; break;
+                case "n0x": n0x = value; break;
+                case "n0y": n0y = value; break;
+                case "n0kind": n0kind = (int)value; break;
+                case "n0focus": n0focus = (int)value; break;
+                case "n0lvl": n0lvl = value; break;
+                case "n1x": n1x = value; break;
+                case "n1y": n1y = value; break;
+                case "n1kind": n1kind = (int)value; break;
+                case "n1focus": n1focus = (int)value; break;
+                case "n1lvl": n1lvl = value; break;
+                case "n2x": n2x = value; break;
+                case "n2y": n2y = value; break;
+                case "n2kind": n2kind = (int)value; break;
+                case "n2focus": n2focus = (int)value; break;
+                case "n2lvl": n2lvl = value; break;
+                case "n3x": n3x = value; break;
+                case "n3y": n3y = value; break;
+                case "n3kind": n3kind = (int)value; break;
+                case "n3focus": n3focus = (int)value; break;
+                case "n3lvl": n3lvl = value; break;
                 case "temple": temple = (int)value; break;
                 case "frozen": frozen = (int)value; break;
                 case "hands": hands = (int)value; break;

@@ -1,6 +1,6 @@
 {
   "$comment": "ASTROLAB FIELD — the engine-agnostic control surface. hands (or any future input) WRITE the Field; sound, visuals, worlds READ it. This file is the single source of truth shared by the web instrument (hands.js), the OSC relay (td-bridge.js), and any reader (Unity/OscJack, TouchDesigner). Bump `version` on any breaking change.",
-  "version": 3,
+  "version": 4,
   "transport": {
     "websocket": { "host": "127.0.0.1", "port": 8765, "note": "browser -> relay (the browser cannot speak UDP/OSC)" },
     "osc": {
@@ -50,6 +50,29 @@
     "h1x":        { "type": "float", "range": [0, 1], "desc": "hand 1 anchor X in screen space" },
     "h1y":        { "type": "float", "range": [0, 1], "desc": "hand 1 anchor Y in screen space" },
     "span":       { "type": "float", "range": [0, 1], "desc": "distance between the two hands -> scale an object held between them (0 when <2 hands)" },
+
+    "objectsMode": { "type": "bool01", "desc": "node mode: the room is the instrument — archetypal Nodes you reach into to play" },
+    "nodeCount":   { "type": "int", "range": [0, 4], "desc": "how many Node slots are live (n0..n3)" },
+    "n0x": { "type": "float", "range": [0, 1], "desc": "node 0 X (screen space)" },
+    "n0y": { "type": "float", "range": [0, 1], "desc": "node 0 Y (screen space)" },
+    "n0kind": { "type": "int", "range": [-1, 7], "desc": "node 0 archetype index (-1 = empty); see archetypes[]" },
+    "n0focus": { "type": "bool01", "desc": "node 0 is being reached into" },
+    "n0lvl": { "type": "float", "range": [0, 1], "desc": "node 0 activity (a flash for percussion, a level for sustained)" },
+    "n1x": { "type": "float", "range": [0, 1], "desc": "node 1 X" },
+    "n1y": { "type": "float", "range": [0, 1], "desc": "node 1 Y" },
+    "n1kind": { "type": "int", "range": [-1, 7], "desc": "node 1 archetype index" },
+    "n1focus": { "type": "bool01", "desc": "node 1 focus" },
+    "n1lvl": { "type": "float", "range": [0, 1], "desc": "node 1 activity" },
+    "n2x": { "type": "float", "range": [0, 1], "desc": "node 2 X" },
+    "n2y": { "type": "float", "range": [0, 1], "desc": "node 2 Y" },
+    "n2kind": { "type": "int", "range": [-1, 7], "desc": "node 2 archetype index" },
+    "n2focus": { "type": "bool01", "desc": "node 2 focus" },
+    "n2lvl": { "type": "float", "range": [0, 1], "desc": "node 2 activity" },
+    "n3x": { "type": "float", "range": [0, 1], "desc": "node 3 X" },
+    "n3y": { "type": "float", "range": [0, 1], "desc": "node 3 Y" },
+    "n3kind": { "type": "int", "range": [-1, 7], "desc": "node 3 archetype index" },
+    "n3focus": { "type": "bool01", "desc": "node 3 focus" },
+    "n3lvl": { "type": "float", "range": [0, 1], "desc": "node 3 activity" },
     "temple":     { "type": "bool01", "desc": "healing mode (deeper breath + resolution, dimmer, warmer)" },
     "frozen":     { "type": "bool01", "desc": "Hold engaged (the pad is held instead of gliding)" },
     "hands":      { "type": "int", "range": [0, 2], "desc": "number of hands currently tracked" }
@@ -57,6 +80,8 @@
   "modes": ["aeolian", "dorian", "lydian", "phrygian", "ionian"],
   "modeHue": { "aeolian": 215, "dorian": 190, "lydian": 280, "phrygian": 25, "ionian": 45 },
   "poses": ["fist", "point", "peace", "three", "open", "thumb", "claw", "L"],
+  "archetypes": ["fire", "ocean", "saturn", "sun", "moon", "tree", "wind", "memory"],
+  "$archetypeNote": "a Node is generic — it exposes sound · visual · meaning · behavior. fire=action/percussion, ocean=calm/nappes, saturn=structure/drone. The rest are reserved for future grammar.",
   "noteNames": ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
   "tuning": { "a4": 432, "note": "the instrument is tuned to A=432" }
 }

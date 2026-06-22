@@ -83,6 +83,14 @@ namespace Astrolab
             var f = FieldOscReceiver.Instance != null ? FieldOscReceiver.Instance.field : null;
             if (f == null || _lr == null) return;
 
+            if (f.ObjectsMode)   // node mode: the Nodes are the instrument — retire the central glyph
+            {
+                _lr.positionCount = 0;
+                if (_trail != null) _trail.emitting = false;
+                return;
+            }
+            if (_trail != null) _trail.emitting = true;
+
             float hue = (f.ModeHueDeg % 360f) / 360f;
             Color col = Color.HSVToRGB(hue, 0.55f, 1f);
 
