@@ -23,6 +23,8 @@ namespace Astrolab
     public sealed class FieldGlyph : MonoBehaviour
     {
         LineRenderer _lr;
+        TrailRenderer _trail;
+        Bloom _bloom;
         Transform _t;
         Camera _cam;
         float _spin;
@@ -45,10 +47,10 @@ namespace Astrolab
             vol.isGlobal = true; vol.priority = 100f;
             var prof = ScriptableObject.CreateInstance<VolumeProfile>();
             vol.profile = prof;
-            var bloom = prof.Add<Bloom>(true);
-            bloom.intensity.Override(1.4f);
-            bloom.threshold.Override(0.5f);
-            bloom.scatter.Override(0.72f);
+            _bloom = prof.Add<Bloom>(true);
+            _bloom.intensity.Override(1.4f);
+            _bloom.threshold.Override(0.5f);
+            _bloom.scatter.Override(0.72f);
 
             // the glyph itself — a line-drawn polygon in local space
             var go = new GameObject("glyph-line");
@@ -62,6 +64,17 @@ namespace Astrolab
             _lr.widthMultiplier = 0.06f;
             _lr.positionCount = 0;
             _lr.textureMode = LineTextureMode.Stretch;
+
+            // a comet trail from the glyph's center, so movement leaves light behind
+            var tgo = new GameObject("glyph-trail");
+            tgo.transform.SetParent(_t, false);
+            _trail = tgo.AddComponent<TrailRenderer>();
+            _trail.material = new Material(Shader.Find("Sprites/Default"));
+            _trail.time = 0.7f;
+            _trail.startWidth = 0.14f;
+            _trail.endWidth = 0f;
+            _trail.numCapVertices = 4;
+            _trail.minVertexDistance = 0.02f;
         }
 
         void Update()
@@ -92,11 +105,18 @@ namespace Astrolab
             _spin += (12f + (f.twist - 0.5f) * 200f) * Time.deltaTime;
             _t.localRotation = Quaternion.Euler(0, 0, _spin);
 
+            // the glyph breathes with the Field's breath; bloom swells on union + chord-change
+            float pulse = 1f + 0.06f * (f.breath - 0.5f) * 2f + 0.15f * f.bloom;
+            _t.localScale = Vector3.Lerp(_t.localScale, Vector3.one * pulse, 0.2f);
+            if (_bloom != null)
+                _bloom.intensity.Override(Mathf.Lerp(_bloom.intensity.value, 1.1f + 2.4f * f.union + 1.2f * f.bloom, 0.1f));
+
             if (n == 1) BuildPolygon(20, 0.12f + 0.30f * f.intensity);   // root -> a small ring
             else        BuildPolygon(n, R);
             _lr.loop = n != 2;                                            // 2 voices stay an open line
             _lr.startColor = _lr.endColor = col;
             _lr.widthMultiplier = 0.04f + 0.12f * f.intensity + 0.06f * f.pinch;
+            if (_trail != null) { _trail.startColor = col; _trail.endColor = new Color(col.r, col.g, col.b, 0f); }
         }
 
         void BuildPolygon(int n, float r)
