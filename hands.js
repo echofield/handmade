@@ -1348,7 +1348,7 @@ async function begin() {
     setCombo(comboIdx);                                          // start the chosen engine stack (in the gesture)
     landmarker = await makeLandmarker();
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: camMode === 'user' ? 'user' : { ideal: 'environment' }, width: 1280, height: 720, frameRate: { ideal: 60 } }, audio: false });
+      video: { facingMode: camMode === 'user' ? 'user' : { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false });   // lighter capture -> ~half the inference load, much less lag (tune up for quality)
     video.srcObject = stream; await video.play();
     running = true;
     $('loading').classList.add('hidden');
