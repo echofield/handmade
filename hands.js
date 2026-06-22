@@ -222,9 +222,13 @@ const SoftSynth = (() => {
     frozen = [];
     for (let k = 0; k < 6; k++) {
       const a = mkOsc(), b = mkOsc(); b.detune.value = 6;
-      const fg = ctx.createGain(); fg.gain.value = 0;
-      a.connect(fg); b.connect(fg); fg.connect(master); fg.connect(rev);
-      frozen.push({ a, b, fg });
+      const fg = ctx.createGain(); fg.gain.value = 0;        // capture level (set on freeze)
+      const lifeG = ctx.createGain(); lifeG.gain.value = 1;  // slow amplitude breath, independent per layer
+      const pan = ctx.createStereoPanner();                  // slow stereo wander, independent per layer
+      a.connect(fg); b.connect(fg); fg.connect(lifeG); lifeG.connect(pan); pan.connect(master); pan.connect(rev);
+      frozen.push({ a, b, fg, lifeG, pan,
+        aRate: 0.03 + Math.random() * 0.06, aPhase: Math.random() * TAU,    // amplitude drift (period ~11-33s)
+        pRate: 0.02 + Math.random() * 0.05, pPhase: Math.random() * TAU }); // pan drift
     }
     frozenPtr = 0;
 
@@ -302,6 +306,14 @@ const SoftSynth = (() => {
     // openness -> space ; proximity -> drier & more intimate ; hand-height -> reverb bloom
     wet.gain.setTargetAtTime((lerp(0.15, 0.8, F.openness) + highTilt * 0.35) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
+
+    // PER-LAYER LIFE — each frozen layer breathes and wanders the stereo field on its own,
+    // so a held drone keeps moving even when the hands rest (after schollz/conductor).
+    for (const v of frozen) {
+      if (!v.lifeG) continue;
+      v.lifeG.gain.setTargetAtTime(0.7 + 0.3 * Math.sin(now * v.aRate * TAU + v.aPhase), now, 0.3);
+      v.pan.pan.setTargetAtTime(0.6 * Math.sin(now * v.pRate * TAU + v.pPhase), now, 0.4);
+    }
 
     // AMBIENT PULSE — a gesture-driven, probabilistic heartbeat that stays in-key.
     if (pulseOn) {
