@@ -56,7 +56,7 @@ namespace Astrolab
         {
             Instance = this;
             _server = new OscServer(port);
-            _server.MessageDispatcher.AddRootCallback(OnOsc);   // catch every /field/* address
+            _server.MessageDispatcher.AddCallback(string.Empty, OnOsc);   // empty address = monitor ALL /field/* messages
             Debug.Log($"[ASTROLAB] Field receiver listening on UDP {port}");
         }
 
