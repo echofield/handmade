@@ -1049,9 +1049,12 @@ function toggleRecord() {
   };
   mediaRec.start();
   btn.classList.add('active');
-  let left = 30; btn.textContent = 'Stop · ' + left + 's';
-  recCount = setInterval(() => { left--; if (left > 0) btn.textContent = 'Stop · ' + left + 's'; }, 1000);
-  recTimer = setTimeout(() => { if (mediaRec && mediaRec.state === 'recording') mediaRec.stop(); }, 30000);
+  const MAX = 600;                                              // up to 10 minutes per take
+  let left = MAX;
+  const fmt = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  btn.textContent = 'Stop · ' + fmt(left);
+  recCount = setInterval(() => { left--; if (left > 0) btn.textContent = 'Stop · ' + fmt(left); }, 1000);
+  recTimer = setTimeout(() => { if (mediaRec && mediaRec.state === 'recording') mediaRec.stop(); }, MAX * 1000);
 }
 $('fs').addEventListener('click', toggleFs);
 $('freeze').addEventListener('click', () => { Field.frozen = !Field.frozen; $('freeze').classList.toggle('active', Field.frozen); });
