@@ -137,7 +137,7 @@ class OneEuro {
 //   • NeuralEngine — DDSP / RAVE timbre conditioned on the Field
 // =====================================================================
 const SoftSynth = (() => {
-  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi, frozen = [], frozenPtr = 0, dlyFb, dlyMix, leadPtr = 0, lastLeadIdx = -1;
+  let ctx, master, filt, warm, dry, wet, voices, lfo, lfoG, hf, ho, gh, curMidi, frozen = [], frozenPtr = 0, dlyFb, dlyMix, leadPtr = 0, lastLeadIdx = -1, recDest = null, pulseOn = false, pulseNext = 0, pulseStep = 0, pulseBPM = 58;
   const osc = {};
   const warmCurve = (d) => {
     const n = 1024, c = new Float32Array(n), k = 1 + d * 3;
@@ -160,7 +160,7 @@ const SoftSynth = (() => {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.knee.value = 22; comp.ratio.value = 3; comp.attack.value = 0.05; comp.release.value = 0.4;
     filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 1200; filt.Q.value = 0.7;
-    warm = ctx.createWaveShaper(); warm.curve = warmCurve(0.6); warm.oversample = '2x';
+    warm = ctx.createWaveShaper(); warm.curve = warmCurve(0.42); warm.oversample = '2x';
     dry = ctx.createGain(); dry.gain.value = 0.62;
     wet = ctx.createGain(); wet.gain.value = 0.4;
     const rev = ctx.createConvolver(); rev.buffer = makeIR(5.0);
@@ -168,7 +168,10 @@ const SoftSynth = (() => {
     voices.connect(filt); filt.connect(warm);
     warm.connect(dry); warm.connect(rev);
     dry.connect(master); rev.connect(wet); wet.connect(master);
-    master.connect(comp); comp.connect(ctx.destination);
+    const limiter = ctx.createDynamicsCompressor();   // brick-wall: stacked voices can never hard-clip the output
+    limiter.threshold.value = -2; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = 0.003; limiter.release.value = 0.25;
+    master.connect(comp); comp.connect(limiter); limiter.connect(ctx.destination);
+    recDest = ctx.createMediaStreamDestination(); limiter.connect(recDest);   // a (limited) tap for the Record button
     // a feedback delay ties everything into continuity — echoes, spark tails, space
     const delay = ctx.createDelay(1.0); delay.delayTime.value = 0.38;
     dlyFb = ctx.createGain(); dlyFb.gain.value = 0.4;
@@ -188,6 +191,9 @@ const SoftSynth = (() => {
     // a deep tonic PEDAL — grounds melody mode without freezing the pad's gliding wave
     osc.pedal = mkOsc(); osc.gPedal = ctx.createGain(); osc.gPedal.gain.value = 0;
     osc.pedal.connect(osc.gPedal); osc.gPedal.connect(voices);
+    // PULSE kick — a soft sub heartbeat for the ambient pulse (created here, after lfoG, so mkOsc is safe)
+    osc.kick = mkOsc(); osc.gKick = ctx.createGain(); osc.gKick.gain.value = 0;
+    osc.kick.connect(osc.gKick); osc.gKick.connect(master); osc.gKick.connect(rev);
 
     // harmony voice (second fundamental + its octave), gated by Field.harmony
     hf = mkOsc(); ho = mkOsc(); gh = ctx.createGain(); gh.gain.value = 0;
@@ -236,7 +242,7 @@ const SoftSynth = (() => {
 
     curMidi = SCALE[(SCALE.length / 2) | 0];
     if (ctx.state === 'suspended') ctx.resume();
-    master.gain.linearRampToValueAtTime(0.9, ctx.currentTime + 3);
+    master.gain.linearRampToValueAtTime(0.75, ctx.currentTime + 3);
   }
 
   function update(F) {
@@ -264,8 +270,8 @@ const SoftSynth = (() => {
     voices.gain.setTargetAtTime(lerp(0.0, 0.95, amp) * lerp(1, 0.5, F.grasp) * (1 + F.accent * 0.25) * breathSwell, now, 0.12);
     filt.frequency.setTargetAtTime((lerp(340, 6500, F.brightness * 0.85 + F.proximity * 0.15) * calmDark * lerp(1, 1.12, F.breath) + F.accent * 3000) * lerp(1, 0.3, F.grasp), now, 0.06);
     osc.gShim.gain.setTargetAtTime((lerp(0, 0.28, highTilt) + F.bloom * 0.15) * calmPure, now, 0.25);
-    if (osc.gSub) osc.gSub.gain.setTargetAtTime(lerp(0.5, 1.2, lowTilt) * lerp(1, 0.6, F.grasp), now, 0.12);  // hand drops -> the sub swells up
-    if (osc.pedal) { osc.pedal.frequency.setTargetAtTime(midiToFreq(SCALE[0]), now, 0.1); osc.gPedal.gain.setTargetAtTime(F.melody ? 0.5 : 0, now, 0.3); }  // tonic pedal only while melody mode grounds the pad
+    if (osc.gSub) osc.gSub.gain.setTargetAtTime(lerp(0.5, 0.95, lowTilt) * lerp(1, 0.6, F.grasp), now, 0.12);  // hand drops -> the sub swells up
+    if (osc.pedal) { osc.pedal.frequency.setTargetAtTime(midiToFreq(SCALE[0]), now, 0.1); osc.gPedal.gain.setTargetAtTime(F.melody ? 0.4 : 0, now, 0.3); }  // tonic pedal only while melody mode grounds the pad
     osc.low.detune.setTargetAtTime((-7 - (F.twist - 0.5) * 26) * calmPure, now, 0.2);   // calm narrows the chorus -> purer
     osc.high.detune.setTargetAtTime((7 + (F.twist - 0.5) * 26) * calmPure, now, 0.2);
     if (dlyFb) dlyFb.gain.setTargetAtTime(lerp(0.4, 0.6, F.calm), now, 0.5);            // calm opens the space
@@ -296,7 +302,41 @@ const SoftSynth = (() => {
     // openness -> space ; proximity -> drier & more intimate ; hand-height -> reverb bloom
     wet.gain.setTargetAtTime((lerp(0.15, 0.8, F.openness) + highTilt * 0.35) * lerp(1, 0.65, F.proximity) * lerp(1, 0.4, F.grasp) + F.bloom * 0.3, now, 0.3);
     dry.gain.setTargetAtTime(lerp(0.5, 0.78, F.proximity), now, 0.3);
+
+    // AMBIENT PULSE — a gesture-driven, probabilistic heartbeat that stays in-key.
+    if (pulseOn) {
+      const stepDur = 60 / pulseBPM / 4;                                      // 16th-note grid
+      const dens = clamp(0.25 + F.intensity * 0.7 + F.motion * 0.25, 0, 1);   // closer & more motion -> fuller
+      let guard = 0;
+      while (now >= pulseNext && guard++ < 8) {
+        firePulseStep(pulseStep % 16, dens, pulseNext + ((pulseStep % 2) ? stepDur * 0.12 : 0));   // gentle swing on odd steps
+        pulseStep++; pulseNext += stepDur;
+      }
+    }
   }
+
+  function firePulseStep(s, dens, when) {
+    // a soft sub heartbeat on the strong beats (always 0 & 8; 4 & 12 as density rises)
+    const strong = s === 0 || s === 8 || ((s === 4 || s === 12) && dens > 0.4);
+    if (strong) {
+      const f0 = midiToFreq(SCALE[0]) * 0.5;
+      osc.kick.frequency.cancelScheduledValues(when);
+      osc.kick.frequency.setValueAtTime(f0, when);
+      osc.kick.frequency.exponentialRampToValueAtTime(f0 * 0.5, when + 0.12);   // a soft pitch-drop thump
+      osc.gKick.gain.cancelScheduledValues(when);
+      osc.gKick.gain.setValueAtTime(0.0001, when);
+      osc.gKick.gain.linearRampToValueAtTime(0.4, when + 0.006);
+      osc.gKick.gain.setTargetAtTime(0.0001, when + 0.02, 0.13);
+    }
+    // probabilistic in-key plucks weave an ambient arpeggio (follows Smart Mode's key)
+    if (Math.random() < dens * (strong ? 0.18 : 0.6)) {
+      const deg = [0, 4, 2, 6, 1, 5, 3, 6][s % 8];
+      pluckLead(SCALE[clamp(deg + 7, 0, SCALE.length - 1)]);
+    }
+  }
+  function setPulse(v) { pulseOn = v; if (pulseOn && ctx) { pulseNext = ctx.currentTime + 0.08; pulseStep = 0; } }
+  function setBPM(b) { pulseBPM = clamp(b | 0, 30, 140); }
+  function recStream() { return recDest ? recDest.stream : null; }
 
   function pluckLead(midi) {
     if (!osc.lead || !osc.lead.length) return;
@@ -328,7 +368,7 @@ const SoftSynth = (() => {
     master.gain.setTargetAtTime(0, c.currentTime, 0.15);
     setTimeout(() => c.close(), 500); ctx = null;
   }
-  return { start, update, stop, clearFrozen, get ready() { return !!ctx; } };
+  return { start, update, stop, clearFrozen, setPulse, setBPM, recStream, get pulseOn() { return pulseOn; }, get ready() { return !!ctx; } };
 })();
 
 // =====================================================================
@@ -406,7 +446,7 @@ const SampleEngine = (() => {
     dry.connect(master); rev.connect(wet); wet.connect(master); master.connect(comp); comp.connect(ctx.destination);
     curMidi = SCALE[(SCALE.length / 2) | 0];
     if (ctx.state === 'suspended') ctx.resume();
-    master.gain.linearRampToValueAtTime(0.9, ctx.currentTime + 3);
+    master.gain.linearRampToValueAtTime(0.75, ctx.currentTime + 3);
     (async () => {
       for (const m of MANIFEST) {
         const { buf, baseFreq } = await loadLayer(m);
@@ -842,6 +882,34 @@ camLabel();
 $('temple').addEventListener('click', () => { Field.temple = !Field.temple; $('temple').classList.toggle('active', Field.temple); });
 $('mode').addEventListener('click', cycleMode);
 $('smart').addEventListener('click', () => { SmartConductor.enable(!SmartConductor.isOn()); $('smart').classList.toggle('active', SmartConductor.isOn()); });
+$('pulse').addEventListener('click', () => { const on = !SoftSynth.pulseOn; SoftSynth.setPulse(on); $('pulse').classList.toggle('active', on); });
+$('bpm').addEventListener('input', (e) => SoftSynth.setBPM(+e.target.value));
+$('rec').addEventListener('click', toggleRecord);
+
+// RECORD — tap the synth output and save a .webm (no library, no Ableton). Auto-stops at 30s.
+let mediaRec = null, recTimer = null, recCount = null;
+function toggleRecord() {
+  const btn = $('rec');
+  if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); return; }
+  const stream = SoftSynth.recStream && SoftSynth.recStream();
+  if (!stream) { btn.textContent = 'Press Begin first'; setTimeout(() => (btn.textContent = 'Record'), 1500); return; }
+  const chunks = [];
+  mediaRec = new MediaRecorder(stream);
+  mediaRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  mediaRec.onstop = () => {
+    clearTimeout(recTimer); clearInterval(recCount);
+    btn.classList.remove('active'); btn.textContent = 'Record';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(chunks, { type: 'audio/webm' }));
+    a.download = 'astrolab-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.webm';
+    a.click();
+  };
+  mediaRec.start();
+  btn.classList.add('active');
+  let left = 30; btn.textContent = 'Stop · ' + left + 's';
+  recCount = setInterval(() => { left--; if (left > 0) btn.textContent = 'Stop · ' + left + 's'; }, 1000);
+  recTimer = setTimeout(() => { if (mediaRec && mediaRec.state === 'recording') mediaRec.stop(); }, 30000);
+}
 $('fs').addEventListener('click', toggleFs);
 $('freeze').addEventListener('click', () => { Field.frozen = !Field.frozen; $('freeze').classList.toggle('active', Field.frozen); });
 addEventListener('keydown', (e) => {

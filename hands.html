@@ -28,6 +28,9 @@
   .controls { display:flex; gap:10px; justify-content:center; padding-bottom:24px; flex-wrap:wrap; }
   .hidden { display:none !important; }
   .active { background:rgba(236,231,218,.18) !important; }
+  .bpm { pointer-events:auto; display:flex; align-items:center; gap:8px; color:var(--dim);
+    font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+  .bpm input { accent-color:#c9a24a; width:96px; }
 </style>
 </head>
 <body>
@@ -52,11 +55,14 @@
         <button id="temple">Temple</button>
         <button id="mode">Mode</button>
         <button id="smart">Smart</button>
+        <button id="pulse">Pulse</button>
+        <button id="rec">Record</button>
+        <label class="bpm">BPM <input id="bpm" type="range" min="40" max="120" value="58" /></label>
       </div>
     </div>
   </div>
 
   <video id="cam" playsinline muted style="display:none"></video>
-  <script type="module" src="hands.js?v=12"></script>
+  <script type="module" src="hands.js?v=15"></script>
 </body>
 </html>
