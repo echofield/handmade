@@ -115,3 +115,20 @@ sharpens M4's framing but doesn't block the build.
 1. **Wedge** — creative instrument · learning/children/symbols · calm/coherence. (Sharpens the demo.)
 2. **Showable target** — polished *web* first, or push a *Unity build* in parallel?
 3. **Looper vs object-flow** — which M1 piece first? (Recommend: object-flow fix, it's blocking the magic you just felt.)
+
+---
+
+## 7. RESUME HERE — next session (paused 2026-06-23)
+
+**Live now:** https://handmade-5u7k.vercel.app/  (`/` = rooms menu · `/hands.html` = HandSynth · `/field.html` = interpreter · `/pulse.html` = rest). Deployed on Vercel; if the repo is Git-connected, every `git push` to `main` auto-deploys.
+
+**Where we stopped:** V26 Spatial Looper shipped (web + Unity, schema v6). Capture lightened to 640×480@30. Front-door menu set.
+
+**The three things to do next (in priority):**
+1. **Samples — the bank (USER is furnishing it).** Martial provides curated `.wav`s. Then wire them in: `SampleEngine` already reads `samples/*.wav`; give each **archetype** (fire/ocean/saturn…) and the **looper** a signature sampled timbre instead of synth. This is the "sound great" lever — do it first when the bank arrives.
+2. **Hand interaction is still weak — harden it + study MUDRAS.** The hand/finger tracking isn't reliable/expressive enough yet (lag + crude gesture set). Build a richer **gesture vocabulary** (mudras / finger-pose taxonomy) so individual finger movements map to notes cleanly — a real "play with your fingers" model, not just taps. Native/Unity tracking will also help smoothness.
+3. **Experiment across bodies — TouchDesigner + Unity.** Both are installed. The bridge already streams the full Field to TD (OSC 7000) and Unity (9000). Try TD as a visual/feedback surface (`node td-bridge.js`, OSC In CHOP port 7000) and keep growing the Unity body. This is exploration, not critical path.
+
+**Then (unchanged):** behavior facet + V27 semantic nodes (Fire=rhythm, Water=texture, Saturn=structure, Moon=memory) → scene-save JSON → Faust (one DSP, web+Unity) → Quest.
+
+**To run locally:** `node td-bridge.js` + `python -m http.server 8080`, open `http://127.0.0.1:8080/hands.html`. (Vercel `--use-system-ca` was needed to get past the network's TLS interception; deploy is easiest via the dashboard Git-connect.)
